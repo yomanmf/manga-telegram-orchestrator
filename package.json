@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node src/index.mjs",
-    "check": "node --check src/index.mjs && node --check src/command.mjs && node --check src/orchestrator.mjs",
+    "check": "node --check src/index.mjs && node --check src/command.mjs && node --check src/orchestrator.mjs && node --check src/pdf.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
@@ -18,4 +18,3 @@
     "pdf-lib": "^1.17.1"
   }
 }
-

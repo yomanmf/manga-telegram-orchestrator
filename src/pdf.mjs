@@ -4,31 +4,16 @@ import { PDFDocument } from "pdf-lib";
 
 export async function buildKindleVolumes({ sourcePdfs, destinationDir, baseName, maxBytes }) {
   await fs.mkdir(destinationDir, { recursive: true });
+  if (sourcePdfs.length === 0) throw new Error("No PDF pages were produced");
+
+  // PDF-lib rewrites the whole document on every save.  Re-merging the growing
+  // prefix for each chapter is quadratic and becomes painfully slow for a long
+  // manga.  Use source file sizes only as a conservative first grouping, then
+  // validate each rendered group and split only groups that really exceed the
+  // Kindle limit.
+  const groups = await groupSources(sourcePdfs, Math.floor(maxBytes * 0.8));
   const volumes = [];
-  let current = [];
-  let currentBytes = null;
-
-  for (const source of sourcePdfs) {
-    const candidate = [...current, source];
-    const candidateBytes = await mergePdfSources(candidate);
-
-    if (candidateBytes.length > maxBytes && current.length > 0) {
-      volumes.push({ sources: current, bytes: currentBytes });
-      current = [source];
-      currentBytes = await mergePdfSources([source]);
-    } else {
-      current = candidate;
-      currentBytes = candidateBytes;
-    }
-
-    if (currentBytes.length > maxBytes) {
-      volumes.push({ sources: current, bytes: currentBytes, oversize: true });
-      current = [];
-      currentBytes = null;
-    }
-  }
-
-  if (current.length > 0 && currentBytes) volumes.push({ sources: current, bytes: currentBytes });
+  for (const group of groups) volumes.push(...await renderWithinLimit(group, maxBytes));
   if (volumes.length === 0) throw new Error("No PDF pages were produced");
 
   const output = [];
@@ -45,6 +30,52 @@ export async function buildKindleVolumes({ sourcePdfs, destinationDir, baseName,
     });
   }
   return output;
+}
+
+async function groupSources(sources, targetBytes) {
+  const groups = [];
+  let group = [];
+  let size = 0;
+  for (const source of sources) {
+    const sourceBytes = await sourceSize(source);
+    if (group.length > 0 && size + sourceBytes > targetBytes) {
+      groups.push(group);
+      group = [];
+      size = 0;
+    }
+    group.push(source);
+    size += sourceBytes;
+  }
+  if (group.length > 0) groups.push(group);
+  return groups;
+}
+
+async function renderWithinLimit(sources, maxBytes) {
+  const bytes = await mergePdfSources(sources);
+  if (bytes.length <= maxBytes) return [{ sources, bytes }];
+  if (sources.length === 1) return [{ sources, bytes, oversize: true }];
+
+  const splitAt = await balancedSplit(sources);
+  return [
+    ...await renderWithinLimit(sources.slice(0, splitAt), maxBytes),
+    ...await renderWithinLimit(sources.slice(splitAt), maxBytes)
+  ];
+}
+
+async function balancedSplit(sources) {
+  const total = await Promise.all(sources.map(sourceSize));
+  const half = total.reduce((sum, size) => sum + size, 0) / 2;
+  let accumulated = 0;
+  for (let index = 0; index < total.length - 1; index += 1) {
+    accumulated += total[index];
+    if (accumulated >= half) return index + 1;
+  }
+  return Math.floor(sources.length / 2);
+}
+
+async function sourceSize(source) {
+  if (source.bytes) return source.bytes.length;
+  return (await fs.stat(source.filePath)).size;
 }
 
 export async function mergePdfBuffers(buffers) {
