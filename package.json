@@ -1,20 +1,16 @@
 {
-  "name": "manga-telegram-orchestrator",
-  "version": "0.1.0",
+  "name": "manga-kindle-monorepo",
+  "version": "1.0.0",
   "private": true,
-  "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
-    "start": "node src/index.mjs",
-    "check": "node --check src/*.mjs",
-    "test": "node --test test/*.test.mjs"
+    "check": "npm --prefix apps/manga-bot-worker run check && npm --prefix apps/manga-pdf-processor run check && npm --prefix apps/kindle-uploader run check",
+    "test": "npm --prefix apps/manga-bot-worker test && npm --prefix apps/manga-pdf-processor test",
+    "verify": "npm run check && npm test"
   },
-  "dependencies": {
-    "better-sqlite3": "^11.10.0",
-    "express": "^5.1.0",
-    "jszip": "^3.10.1",
-    "pdf-lib": "^1.17.1"
+  "devDependencies": {
+    "railway": "^3.5.5"
   }
 }

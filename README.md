@@ -1,107 +1,86 @@
-# Manga Telegram Orchestrator
+# Manga to Kindle Monorepo
 
-Telegram-управление для существующих сервисов скачивания манги в PDF и
-отправки на Kindle. Вместо ручной работы в браузере пользователь пишет боту:
+Весь рабочий проект в одном репозитории: Telegram-управление, существующий
+веб-интерфейс обработки манги и браузерная автоматизация Send to Kindle.
+
+## Структура
 
 ```text
-Отправь Fable с 201 до последней
+apps/
+├── manga-bot-worker/       Telegram webhook, очередь, PDF collector
+├── manga-pdf-processor/    веб-интерфейс, WeebCentral, обработка страниц
+└── kindle-uploader/        S3-очередь, Playwright, Chromium и noVNC
+.railway/                   проектная Railway-конфигурация
+.github/workflows/ci.yml    проверки всех сервисов
 ```
 
-Сервис находит произведение, фиксирует список доступных глав, формирует PDF,
-делит результат на безопасные для Kindle части и передаёт их в уже работающий
-`kindle-uploader`. Если Amazon потребует повторный вход, бот пришлёт
-одноразовую ссылку на существующий noVNC-интерфейс Kindle uploader.
+| Сервис Railway | Root directory | Runtime |
+| --- | --- | --- |
+| `manga-bot-worker` | `/apps/manga-bot-worker` | Node.js 20, Express, SQLite |
+| `manga-pdf-processor` | `/apps/manga-pdf-processor` | Bun, Hono, pdf-lib |
+| `kindle-uploader` | `/apps/kindle-uploader` | Node.js, Playwright, Chromium |
 
-## Что остаётся без изменений
+## Поток данных
 
-Этот репозиторий разворачивается отдельным сервисом `manga-bot-worker`.
-Существующие сервисы не заменяются и продолжают работать как прежде:
+```text
+Telegram
+  → manga-bot-worker
+  → manga-pdf-processor
+  → WeebCentral
+  → PDF collector
+  → kindle-uploader
+  → Amazon Send to Kindle
+```
 
-- `manga-pdf-processor` — веб-интерфейс и API обработки глав;
-- `kindle-uploader` — браузерная автоматизация Send to Kindle.
+Веб-интерфейс остаётся доступен напрямую через `manga-pdf-processor` и
+использует тот же Kindle uploader.
 
-Веб-интерфейс остаётся резервным способом запуска задач.
-
-## Команды бота
-
-- `Отправь Fable с 201 до последней` — поставить мангу в очередь;
-- `/status` — показать последнее задание и его прогресс;
-- `/cancel` — остановить текущую обработку;
-- `/retry` — повторить неудавшееся задание;
-- `/kindle` — получить одноразовую ссылку для входа в Amazon, если это нужно.
-- `/merge` — показать состояние `Merge vertical pages`;
-- `/merge on` или `/merge off` — включить или выключить объединение вертикальных страниц для новых заданий.
-
-Если найдено несколько произведений, бот предложит выбор кнопками. В очередь
-одновременно берётся только одно задание: это снижает нагрузку и не допускает
-конкуренции за один Amazon browser profile.
-
-`Merge vertical pages` включён по умолчанию и сохраняется для этого Telegram-
-пользователя. Настройка фиксируется в момент создания задания, поэтому
-изменение не влияет на уже запущенную обработку.
-
-## Как проходит задача
-
-1. Бот ищет мангу через существующий Manga PDF Processor.
-2. Он выбирает главы с указанного номера до списка глав, доступного на момент
-   запуска задания.
-3. Каждая глава обрабатывается существующим сервисом и сохраняется временно.
-4. Главы объединяются в PDF-тома. Размер тома ограничен `MAX_PDF_BYTES`
-   (по умолчанию 185 MiB), что оставляет запас до лимита Kindle uploader в
-   200 000 000 байт.
-5. Томы загружаются напрямую в Kindle uploader: через Telegram PDF никогда не
-   передаются.
-6. Бот сообщает итог, ошибку или необходимость войти в Amazon.
-
-Состояние задач хранится в SQLite на persistent volume (`DATA_DIR`), поэтому
-очередь и статусы переживают перезапуск контейнера.
-
-## Настройка Railway
-
-Создай отдельный сервис из этого репозитория, подключи persistent volume в
-`/data` и задай переменные из [`.env.example`](.env.example).
-
-Обязательные переменные:
-
-| Переменная | Назначение |
-| --- | --- |
-| `TELEGRAM_BOT_TOKEN` | Токен, выданный `@BotFather`. |
-| `TELEGRAM_WEBHOOK_SECRET` | Случайный секрет для проверки входящих webhook. |
-| `TELEGRAM_ALLOWED_CHAT_ID` | Единственный Telegram chat ID, которому разрешены команды. |
-| `MANGA_APP_URL` | Публичный адрес существующего Manga PDF Processor. |
-| `MANGA_APP_SESSION_TOKEN` | Значение `APP_SESSION_TOKEN` существующего веб-сервиса. |
-| `KINDLE_WORKER_URL` | Адрес существующего Kindle uploader. В Railway предпочтителен private URL. |
-| `KINDLE_SHARED_SECRET` | `KINDLE_SHARED_SECRET` существующего Kindle uploader. |
-| `PUBLIC_BASE_URL` | Публичный адрес этого bot-сервиса, без завершающего `/`. |
-
-После успешного запуска сервис автоматически регистрирует webhook по адресу
-`<PUBLIC_BASE_URL>/telegram/webhook`. Для первого подключения:
-
-1. Создай бота через `@BotFather` и получи токен.
-2. Открой созданного бота и отправь `/start`.
-3. Определи chat ID через Telegram Bot API `getUpdates` до регистрации webhook.
-4. Сохрани chat ID в `TELEGRAM_ALLOWED_CHAT_ID` и разверни сервис.
-
-Не помещай токены, session token или shared secret в Git. Все эти значения
-должны быть sealed-переменными Railway.
-
-## Проверки
+## Локальные проверки
 
 ```bash
-npm run check
-npm test
+npm ci
+npm ci --prefix apps/manga-bot-worker
+npm ci --prefix apps/manga-pdf-processor
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --prefix apps/kindle-uploader
+npm run verify
 ```
 
-Тесты покрывают разбор русской команды, выбор фактических номеров глав,
-сохранение очереди, сборку PDF и сквозной путь от Telegram-команды до
-подтверждения Kindle uploader с тестовыми клиентами.
+Корневая команда проверяет синтаксис всех трёх сервисов, тесты Telegram → PDF
+→ Kindle orchestration и контрактные тесты веб-процессора.
 
-## Ограничения
+## Railway
 
-- Отмена останавливает работу оркестратора, но не может отозвать PDF, которые
-  Amazon уже принял.
-- Если одиночная обработанная глава превышает лимит Kindle, задача завершится
-  с ошибкой: такую главу нужно дополнительно делить на уровне исходного
-  обработчика.
-- Amazon-вход остаётся ручным действием только в момент, когда Amazon требует
-  повторную авторизацию.
+Проект использует три services, S3-compatible bucket и два persistent volumes:
+
+- volume `manga-bot-worker` в `/data` хранит SQLite;
+- volume `kindle-uploader` в `/data` хранит Amazon browser profile и очередь;
+- bucket `kindle-pdf-queue` временно хранит PDF между сервисами.
+
+Секреты не коммитятся. В Railway остаются Telegram token, webhook secret,
+пароль/session token веб-приложения, Kindle shared secret и S3 credentials.
+
+Переменные каждого приложения перечислены в его `.env.example`.
+
+Текущее состояние инфраструктуры описано декларативно в
+`.railway/railway.ts`. Проверить изменения перед применением:
+
+```bash
+npx railway config plan
+```
+
+Конфигурация переводит все три Railway-сервиса на этот GitHub monorepo и
+собирает каждый сервис из собственного root directory. Секретные значения
+импортированы как `preserve()` и в Git не попадают.
+
+## Telegram
+
+Пример команды:
+
+```text
+Отправь The Fable с 201 до последней
+```
+
+Доступны `/status`, `/cancel`, `/retry`, `/kindle`, `/merge on` и `/merge off`.
+`Merge vertical pages` включён по умолчанию и повторяет PDF collector
+веб-интерфейса, включая RTL-развороты и пустую левую половину для одиночной
+vertical-страницы.

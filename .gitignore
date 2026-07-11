@@ -1,8 +1,8 @@
 node_modules/
+.DS_Store
 .env
 .env.*
 !.env.example
 data/
 coverage/
 npm-debug.log*
-

@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/manga-bot-worker/package-lock.json
+            apps/manga-pdf-processor/package-lock.json
+            apps/kindle-uploader/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix apps/manga-bot-worker
+      - run: npm ci --prefix apps/manga-pdf-processor
+      - run: npm ci --prefix apps/kindle-uploader
+      - run: npm run verify
+
+  docker-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - manga-bot-worker
+          - manga-pdf-processor
+          - kindle-uploader
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ${{ matrix.service }} image
+        run: docker build --tag "manga-kindle/${{ matrix.service }}:ci" "apps/${{ matrix.service }}"
