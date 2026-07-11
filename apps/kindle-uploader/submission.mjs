@@ -38,6 +38,13 @@ export function firstNewEvidence(current = [], baseline = []) {
 }
 
 export function normalizeLoadedJob(job) {
+  if (
+    job.status === "queued" &&
+    job.submittedAt &&
+    !job.sentAt
+  ) {
+    return { ...job, resumeSubmission: true };
+  }
   if (job.status === "processing") {
     return { ...job, status: "queued" };
   }

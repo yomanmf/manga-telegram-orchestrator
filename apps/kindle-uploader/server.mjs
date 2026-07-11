@@ -853,6 +853,11 @@ async function runQueue() {
         return;
       }
 
+      if (job.resumeSubmission && job.submittedAt) {
+        await processQueueJob(job);
+        continue;
+      }
+
       if (!await checkKindleSession()) {
         await markJobWaitingForAuth(job);
         return;

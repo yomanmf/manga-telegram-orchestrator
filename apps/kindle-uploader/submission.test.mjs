@@ -47,6 +47,21 @@ test("resumes a submitted verifying job without uploading it again", () => {
   });
 });
 
+test("keeps a legacy queued submission from being uploaded again", () => {
+  assert.deepEqual(normalizeLoadedJob({
+    id: "job-2",
+    status: "queued",
+    submittedAt: "2026-07-11T20:09:28.756Z",
+    sentAt: null
+  }), {
+    id: "job-2",
+    status: "queued",
+    submittedAt: "2026-07-11T20:09:28.756Z",
+    sentAt: null,
+    resumeSubmission: true
+  });
+});
+
 test("recognizes a stale Chromium profile lock", () => {
   assert.equal(isChromiumProfileLockError(
     new Error("process_singleton_posix: The profile appears to be in use")
