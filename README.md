@@ -1,26 +1,27 @@
 # Manga to Kindle Monorepo
 
-Весь рабочий проект в одном репозитории: Telegram-управление, существующий
-веб-интерфейс обработки манги и браузерная автоматизация Send to Kindle.
+The complete production project lives in one repository: Telegram controls,
+the existing manga processing web interface, and browser automation for Send
+to Kindle.
 
-## Структура
+## Structure
 
 ```text
 apps/
-├── manga-bot-worker/       Telegram webhook, очередь, PDF collector
-├── manga-pdf-processor/    веб-интерфейс, WeebCentral, обработка страниц
-└── kindle-uploader/        S3-очередь, Playwright, Chromium и noVNC
-.railway/                   проектная Railway-конфигурация
-.github/workflows/ci.yml    проверки всех сервисов
+├── manga-bot-worker/       Telegram webhook, job queue, PDF collector
+├── manga-pdf-processor/    web UI, WeebCentral, page processing
+└── kindle-uploader/        S3 queue, Playwright, Chromium, and noVNC
+.railway/                   Railway project configuration
+.github/workflows/ci.yml    checks for all services
 ```
 
-| Сервис Railway | Root directory | Runtime |
+| Railway service | Root directory | Runtime |
 | --- | --- | --- |
 | `manga-bot-worker` | `/apps/manga-bot-worker` | Node.js 20, Express, SQLite |
-| `manga-pdf-processor` | `/apps/manga-pdf-processor` | Bun, Hono, pdf-lib |
+| `manga-pdf-processor` | `/apps/manga-pdf-processor` | Bun, Hono, pdf-lib, Sharp |
 | `kindle-uploader` | `/apps/kindle-uploader` | Node.js, Playwright, Chromium |
 
-## Поток данных
+## Data flow
 
 ```text
 Telegram
@@ -32,10 +33,10 @@ Telegram
   → Amazon Send to Kindle
 ```
 
-Веб-интерфейс остаётся доступен напрямую через `manga-pdf-processor` и
-использует тот же Kindle uploader.
+The web interface remains directly available through `manga-pdf-processor`
+and uses the same Kindle uploader.
 
-## Локальные проверки
+## Local verification
 
 ```bash
 npm ci
@@ -45,42 +46,45 @@ PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --prefix apps/kindle-uploader
 npm run verify
 ```
 
-Корневая команда проверяет синтаксис всех трёх сервисов, тесты Telegram → PDF
-→ Kindle orchestration и контрактные тесты веб-процессора.
+The root command checks the syntax of all three services, the Telegram → PDF
+→ Kindle orchestration tests, and the web processor contract tests.
 
 ## Railway
 
-Проект использует три services, S3-compatible bucket и два persistent volumes:
+The project uses three services, an S3-compatible bucket, and two persistent
+volumes:
 
-- volume `manga-bot-worker` в `/data` хранит SQLite;
-- volume `kindle-uploader` в `/data` хранит Amazon browser profile и очередь;
-- bucket `kindle-pdf-queue` временно хранит PDF между сервисами.
+- the `manga-bot-worker` volume stores SQLite data at `/data`;
+- the `kindle-uploader` volume stores the Amazon browser profile and queue at
+  `/data`;
+- the `kindle-pdf-queue` bucket temporarily stores PDFs between services.
 
-Секреты не коммитятся. В Railway остаются Telegram token, webhook secret,
-пароль/session token веб-приложения, Kindle shared secret и S3 credentials.
+Secrets are never committed. Railway stores the Telegram token, webhook
+secret, web application password and session token, Kindle shared secret, and
+S3 credentials.
 
-Переменные каждого приложения перечислены в его `.env.example`.
+Each application's variables are documented in its `.env.example` file.
 
-Текущее состояние инфраструктуры описано декларативно в
-`.railway/railway.ts`. Проверить изменения перед применением:
+The current infrastructure state is declared in `.railway/railway.ts`.
+Preview changes before applying them:
 
 ```bash
 npx railway config plan
 ```
 
-Конфигурация переводит все три Railway-сервиса на этот GitHub monorepo и
-собирает каждый сервис из собственного root directory. Секретные значения
-импортированы как `preserve()` и в Git не попадают.
+The configuration connects all three Railway services to this GitHub monorepo
+and builds each service from its own root directory. Secret values are imported
+as `preserve()` and never enter Git.
 
 ## Telegram
 
-Пример команды:
+Example command:
 
 ```text
-Отправь The Fable с 201 до последней
+Send The Fable from chapter 201 to latest
 ```
 
-Доступны `/status`, `/cancel`, `/retry`, `/kindle`, `/merge on` и `/merge off`.
-`Merge vertical pages` включён по умолчанию и повторяет PDF collector
-веб-интерфейса, включая RTL-развороты и пустую левую половину для одиночной
-vertical-страницы.
+Available commands include `/status`, `/cancel`, `/retry`, `/kindle`,
+`/merge on`, and `/merge off`. `Merge vertical pages` is enabled by default and
+matches the web interface's PDF collector behavior, including right-to-left
+spreads and an empty left half for an unpaired vertical page.
