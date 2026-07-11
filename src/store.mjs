@@ -39,13 +39,13 @@ class Store {
       INSERT INTO jobs (
         id, chat_id, status, title_query, series_url, series_title,
         from_chapter, chapter_manifest, choice_manifest, progress,
-        kindle_jobs, error, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        kindle_jobs, merge_vertical_pages, error, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, String(job.chatId), job.status || "queued", job.titleQuery || null,
       job.seriesUrl || null, job.seriesTitle || null, job.fromChapter || null,
       json(job.chapterManifest || []), json(job.choiceManifest || []),
-      job.progress || "", json(job.kindleJobs || []), job.error || null,
+      job.progress || "", json(job.kindleJobs || []), job.mergeVerticalPages === false ? 0 : 1, job.error || null,
       timestamp, timestamp
     );
     return this.getJob(id);
@@ -126,6 +126,20 @@ class Store {
     if (!job) return null;
     return this.updateJob(job.id, { status: "resume_pending", error: null, progress: "Повторный запуск" });
   }
+
+  getMergeVerticalPages(chatId) {
+    const row = this.db.prepare("SELECT merge_vertical_pages FROM user_settings WHERE chat_id = ?").get(String(chatId));
+    return row ? Boolean(row.merge_vertical_pages) : true;
+  }
+
+  setMergeVerticalPages(chatId, enabled) {
+    this.db.prepare(`
+      INSERT INTO user_settings (chat_id, merge_vertical_pages, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(chat_id) DO UPDATE SET merge_vertical_pages = excluded.merge_vertical_pages, updated_at = excluded.updated_at
+    `).run(String(chatId), enabled ? 1 : 0, now());
+    return Boolean(enabled);
+  }
 }
 
 function migrate(db) {
@@ -146,13 +160,27 @@ function migrate(db) {
       choice_manifest TEXT NOT NULL DEFAULT '[]',
       progress TEXT NOT NULL DEFAULT '',
       kindle_jobs TEXT NOT NULL DEFAULT '[]',
+      merge_vertical_pages INTEGER NOT NULL DEFAULT 1,
       error TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS jobs_chat_created_idx ON jobs(chat_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS jobs_status_created_idx ON jobs(status, created_at);
+    CREATE TABLE IF NOT EXISTS user_settings (
+      chat_id TEXT PRIMARY KEY,
+      merge_vertical_pages INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL
+    );
   `);
+  ensureColumn(db, "jobs", "merge_vertical_pages", "INTEGER NOT NULL DEFAULT 1");
+}
+
+function ensureColumn(db, table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!columns.some((item) => item.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }
 
 function hydrateJob(row) {
@@ -165,7 +193,8 @@ function hydrateJob(row) {
     fromChapter: row.from_chapter,
     chapterManifest: parseJson(row.chapter_manifest, []),
     choiceManifest: parseJson(row.choice_manifest, []),
-    kindleJobs: parseJson(row.kindle_jobs, [])
+    kindleJobs: parseJson(row.kindle_jobs, []),
+    mergeVerticalPages: row.merge_vertical_pages !== 0
   };
 }
 

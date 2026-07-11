@@ -15,7 +15,7 @@ test("merges source PDFs and splits on a configured size", async () => {
     pdf.addPage([300, 400]);
     const filePath = path.join(directory, `${index}.pdf`);
     await fs.writeFile(filePath, await pdf.save());
-    sources.push({ name: `${index}.pdf`, filePath });
+    sources.push({ name: `${index}.pdf`, chapterTitle: `Chapter ${201 + index}`, filePath });
   }
   const volumes = await buildKindleVolumes({
     sourcePdfs: sources,
@@ -25,4 +25,5 @@ test("merges source PDFs and splits on a configured size", async () => {
   });
   assert.equal(volumes.length, 1);
   assert.ok(volumes[0].size > 0);
+  assert.equal(volumes[0].fileName, "Fable Chapter 201-Chapter 202.pdf");
 });

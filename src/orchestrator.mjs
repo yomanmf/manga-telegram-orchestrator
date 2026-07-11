@@ -34,6 +34,7 @@ export class Orchestrator {
     if (parsed.type === "cancel") return this.cancel(chatId);
     if (parsed.type === "retry") return this.retry(chatId);
     if (parsed.type === "kindle") return this.sendKindleConnectUrl(chatId);
+    if (parsed.type === "merge") return this.mergeVerticalPages(chatId, parsed.enabled);
     if (parsed.type === "send") {
       const existing = this.store.latestJob(chatId, ["queued", "resume_pending", "processing", "delivering", "waiting_auth", "waiting_choice"]);
       if (existing) {
@@ -45,6 +46,7 @@ export class Orchestrator {
         status: "queued",
         titleQuery: parsed.titleQuery,
         fromChapter: parsed.fromChapter,
+        mergeVerticalPages: this.store.getMergeVerticalPages(chatId),
         progress: "Задание принято, ищу мангу"
       });
       await this.telegram.sendMessage(chatId, `Задание ${shortId(job.id)} принято: «${parsed.titleQuery}», главы ${parsed.fromChapter}–последняя.`);
@@ -114,7 +116,7 @@ export class Orchestrator {
       const volumes = await buildKindleVolumes({
         sourcePdfs,
         destinationDir: path.join(workDir, "volumes"),
-        baseName: `${job.seriesTitle} ${job.chapterManifest[0].title}-${job.chapterManifest.at(-1).title}`,
+        baseName: job.seriesTitle,
         maxBytes: this.maxPdfBytes
       });
       if (volumes.some((volume) => volume.oversize)) {
@@ -182,12 +184,17 @@ export class Orchestrator {
       const outputs = await this.mangaApp.processChapter({
         chapterId: chapter.id,
         mangaTitle: job.seriesTitle,
-        chapterTitle: chapter.title
+        chapterTitle: chapter.title,
+        shouldMerge: job.mergeVerticalPages
       });
       for (let part = 0; part < outputs.length; part += 1) {
         const filePath = path.join(workDir, `${String(index + 1).padStart(4, "0")}-${String(part + 1).padStart(2, "0")}.pdf`);
         await fs.writeFile(filePath, outputs[part].bytes);
-        sources.push({ name: `${chapter.title} ${outputs[part].name}`, filePath });
+        sources.push({
+          name: `${chapter.title} ${outputs[part].name}`,
+          chapterTitle: chapter.title,
+          filePath
+        });
       }
       if ((index + 1) % 3 === 0 || index + 1 === chapters.length) {
         await this.telegram.sendMessage(job.chatId, `Задание ${shortId(job.id)}: обработано ${index + 1}/${chapters.length} глав.`);
@@ -242,6 +249,16 @@ export class Orchestrator {
     await this.telegram.sendMessage(chatId, job ? `Задание ${shortId(job.id)} поставлено на повтор.` : "Нет неудавшегося задания для повтора.");
   }
 
+  async mergeVerticalPages(chatId, enabled) {
+    if (enabled === null) {
+      const current = this.store.getMergeVerticalPages(chatId);
+      await this.telegram.sendMessage(chatId, `Merge vertical pages: ${current ? "включено" : "выключено"}.\n/merge on или /merge off`);
+      return;
+    }
+    this.store.setMergeVerticalPages(chatId, enabled);
+    await this.telegram.sendMessage(chatId, `Merge vertical pages ${enabled ? "включено" : "выключено"}. Новые задания будут использовать эту настройку.`);
+  }
+
   async sendKindleConnectUrl(chatId, jobId = null) {
     try {
       const result = await this.kindle.connectToken();
@@ -259,9 +276,9 @@ function describeJob(job) {
     `Статус: ${job.status}`,
     job.seriesTitle ? `Манга: ${job.seriesTitle}` : `Поиск: ${job.titleQuery}`,
     job.fromChapter ? `От: ${job.fromChapter}` : null,
+    `Merge vertical pages: ${job.mergeVerticalPages ? "вкл" : "выкл"}`,
     job.progress || null,
     job.kindleJobs?.length ? `PDF в Kindle: ${job.kindleJobs.length}` : null
   ].filter(Boolean);
   return details.join("\n");
 }
-

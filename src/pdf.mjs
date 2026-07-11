@@ -6,19 +6,16 @@ export async function buildKindleVolumes({ sourcePdfs, destinationDir, baseName,
   await fs.mkdir(destinationDir, { recursive: true });
   if (sourcePdfs.length === 0) throw new Error("No PDF pages were produced");
 
-  // PDF-lib rewrites the whole document on every save.  Re-merging the growing
-  // prefix for each chapter is quadratic and becomes painfully slow for a long
-  // manga.  Use source file sizes only as a conservative first grouping, then
-  // validate each rendered group and split only groups that really exceed the
-  // Kindle limit.
-  const groups = await groupSources(sourcePdfs, Math.floor(maxBytes * 0.8));
-  const volumes = [];
-  for (const group of groups) volumes.push(...await renderWithinLimit(group, maxBytes));
+  // Render the complete selection first.  Source PDF sizes are only an
+  // estimate and previously caused needless splitting even when the finished
+  // combined PDF fitted into the Kindle limit.  If it really is too large,
+  // split recursively at chapter boundaries.
+  const volumes = await renderWithinLimit(sourcePdfs, maxBytes);
   if (volumes.length === 0) throw new Error("No PDF pages were produced");
 
   const output = [];
   for (let index = 0; index < volumes.length; index += 1) {
-    const fileName = `${sanitize(baseName)}__part_${String(index + 1).padStart(2, "0")}_of_${String(volumes.length).padStart(2, "0")}.pdf`;
+    const fileName = buildVolumeFileName(baseName, volumes[index].sources, index, volumes.length);
     const filePath = path.join(destinationDir, fileName);
     await fs.writeFile(filePath, volumes[index].bytes);
     output.push({
@@ -32,22 +29,17 @@ export async function buildKindleVolumes({ sourcePdfs, destinationDir, baseName,
   return output;
 }
 
-async function groupSources(sources, targetBytes) {
-  const groups = [];
-  let group = [];
-  let size = 0;
-  for (const source of sources) {
-    const sourceBytes = await sourceSize(source);
-    if (group.length > 0 && size + sourceBytes > targetBytes) {
-      groups.push(group);
-      group = [];
-      size = 0;
-    }
-    group.push(source);
-    size += sourceBytes;
-  }
-  if (group.length > 0) groups.push(group);
-  return groups;
+function buildVolumeFileName(baseName, sources, index, count) {
+  const chapterTitles = [...new Set(sources.map((source) => source.chapterTitle).filter(Boolean))];
+  const chapterRange = chapterTitles.length === 0
+    ? ""
+    : chapterTitles.length === 1
+      ? ` ${chapterTitles[0]}`
+      : ` ${chapterTitles[0]}-${chapterTitles.at(-1)}`;
+  const suffix = count > 1
+    ? `__part_${String(index + 1).padStart(2, "0")}_of_${String(count).padStart(2, "0")}`
+    : "";
+  return `${sanitize(`${baseName}${chapterRange}`)}${suffix}.pdf`;
 }
 
 async function renderWithinLimit(sources, maxBytes) {

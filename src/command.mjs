@@ -30,6 +30,10 @@ export function parseCommand(text) {
   if (/^\/kindle(?:\s|$)/i.test(input) || /^kindle$/i.test(input)) {
     return { type: "kindle" };
   }
+  const merge = input.match(/^\/merge(?:\s+(on|off))?$/i);
+  if (merge) {
+    return { type: "merge", enabled: merge[1] ? merge[1].toLowerCase() === "on" : null };
+  }
   if (/^\/start(?:\s|$)/i.test(input) || /^помощь$/i.test(input)) {
     return { type: "help" };
   }
@@ -68,7 +72,6 @@ export function helpText() {
     "Пример:",
     "Отправь Fable с 201 до последней",
     "",
-    "Команды: /status, /cancel, /retry, /kindle"
+    "Команды: /status, /cancel, /retry, /kindle, /merge [on|off]"
   ].join("\n");
 }
-

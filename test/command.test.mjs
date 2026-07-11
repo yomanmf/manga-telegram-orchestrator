@@ -13,6 +13,12 @@ test("parses Russian Kindle range command", () => {
   });
 });
 
+test("parses Merge vertical pages commands", () => {
+  assert.deepEqual(parseCommand("/merge"), { type: "merge", enabled: null });
+  assert.deepEqual(parseCommand("/merge on"), { type: "merge", enabled: true });
+  assert.deepEqual(parseCommand("/merge off"), { type: "merge", enabled: false });
+});
+
 test("uses chapter labels rather than list position", () => {
   const selected = selectChapterRange([
     { id: "a", title: "Chapter 199" },
@@ -29,6 +35,10 @@ test("deduplicates Telegram updates and persists jobs", () => {
   assert.equal(store.rememberUpdate(42), false);
   const job = store.createJob({ chatId: "7", status: "queued", titleQuery: "Fable", fromChapter: "201" });
   assert.equal(store.latestJob("7").id, job.id);
+  assert.equal(job.mergeVerticalPages, true);
+  assert.equal(store.getMergeVerticalPages("7"), true);
+  store.setMergeVerticalPages("7", false);
+  assert.equal(store.getMergeVerticalPages("7"), false);
 });
 
 test("runs a Telegram request through PDF assembly and Kindle confirmation", async () => {
@@ -54,7 +64,10 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
         ]
       };
     },
-    async processChapter() { return [{ name: "chapter.pdf", bytes: pagePdf }]; }
+    async processChapter({ shouldMerge }) {
+      assert.equal(shouldMerge, true);
+      return [{ name: "chapter.pdf", bytes: pagePdf }];
+    }
   };
   const kindle = {
     async enqueueFile() { return { id: "kindle-job-1", status: "queued" }; },

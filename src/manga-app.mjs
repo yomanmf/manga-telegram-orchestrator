@@ -24,7 +24,7 @@ export function createMangaAppClient({ baseUrl, sessionToken }) {
     loadSeries(seriesUrl) {
       return json(`/weebcentral/series?url=${encodeURIComponent(seriesUrl)}`);
     },
-    async processChapter({ chapterId, mangaTitle, chapterTitle }) {
+    async processChapter({ chapterId, mangaTitle, chapterTitle, shouldMerge = true }) {
       const response = await fetch(`${url}/weebcentral/chapter`, {
         method: "POST",
         headers: {
@@ -32,7 +32,7 @@ export function createMangaAppClient({ baseUrl, sessionToken }) {
           Accept: "application/zip",
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ chapterId, mangaTitle, chapterTitle, shouldMerge: true })
+        body: JSON.stringify({ chapterId, mangaTitle, chapterTitle, shouldMerge })
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
@@ -50,4 +50,3 @@ export function createMangaAppClient({ baseUrl, sessionToken }) {
     }
   };
 }
-
