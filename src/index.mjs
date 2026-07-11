@@ -78,7 +78,10 @@ app.post("/admin/set-webhook", async (req, res) => {
 
 const server = app.listen(config.port, () => {
   console.log(`Manga Telegram orchestrator listening on ${config.port}`);
-  if (ready) orchestrator.start();
+  if (ready) {
+    orchestrator.start();
+    configureWebhook().catch((error) => console.error("Telegram webhook setup failed", error));
+  }
   else console.warn(`Setup required. Missing: ${missingConfiguration.join(", ")}`);
 });
 
@@ -122,4 +125,13 @@ function requiredNames(config) {
     ["kindleWorkerUrl", "KINDLE_WORKER_URL"],
     ["kindleSharedSecret", "KINDLE_SHARED_SECRET"]
   ].filter(([key]) => !config[key]).map(([, name]) => name);
+}
+
+async function configureWebhook() {
+  if (!config.publicBaseUrl) {
+    console.warn("PUBLIC_BASE_URL is not configured; Telegram webhook was not registered");
+    return;
+  }
+  const result = await telegram.setWebhook(`${config.publicBaseUrl}/telegram/webhook`, config.webhookSecret);
+  console.log(`Telegram webhook configured: ${result.description || "ok"}`);
 }
