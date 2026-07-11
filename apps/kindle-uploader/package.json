@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs"
+    "check": "node --check server.mjs && node --check submission.mjs",
+    "test": "node --test *.test.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.840.0",

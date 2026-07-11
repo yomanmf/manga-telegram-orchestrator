@@ -2,9 +2,25 @@ const SEND_PATTERNS = [
   /^(?:отправь|пришли|скинь)\s+(?:мне\s+)?(?:на\s+kindle\s+)?(.+?)\s+с\s+(?:главы\s+)?([\d.,]+)\s+(?:до|по)\s+(?:самой\s+)?((?:последней(?:\s+главы)?)|latest|[\d.,]+)$/i,
   /^(?:send)\s+(.+?)\s+(?:from)\s+(?:chapter\s+)?([\d.]+)\s+(?:to)\s+((?:latest|last)|[\d.]+)$/i
 ];
+const ALL_CHAPTERS_PATTERNS = [
+  /^(?:отправь|пришли|скинь)\s+(?:мне\s+)?(?:на\s+kindle\s+)?(.+?)\s+все\s+главы$/i,
+  /^(?:send)\s+(.+?)\s+all\s+chapters$/i
+];
 
 export function parseCommand(text) {
   const input = String(text || "").trim().replace(/\s+/g, " ");
+
+  for (const pattern of ALL_CHAPTERS_PATTERNS) {
+    const match = input.match(pattern);
+    if (match) {
+      return {
+        type: "send",
+        titleQuery: cleanTitle(match[1]),
+        fromChapter: "first",
+        toChapter: "latest"
+      };
+    }
+  }
 
   for (const pattern of SEND_PATTERNS) {
     const match = input.match(pattern);
@@ -79,6 +95,7 @@ export function helpText() {
     "Пример:",
     "Отправь Fable с 201 до последней",
     "Отправь One Piece (Color) с 23 до 100",
+    "Отправь One Piece (Color) все главы",
     "",
     "Команды: /status, /cancel, /retry, /kindle, /merge [on|off]"
   ].join("\n");

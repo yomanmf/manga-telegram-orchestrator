@@ -50,7 +50,7 @@ export class Orchestrator {
         mergeVerticalPages: this.store.getMergeVerticalPages(chatId),
         progress: "Задание принято, ищу мангу"
       });
-      await this.telegram.sendMessage(chatId, `Задание ${shortId(job.id)} принято: «${parsed.titleQuery}», главы ${parsed.fromChapter}–${formatToChapter(parsed.toChapter)}.`);
+      await this.telegram.sendMessage(chatId, `Задание ${shortId(job.id)} принято: «${parsed.titleQuery}», ${formatChapterRange(parsed.fromChapter, parsed.toChapter)}.`);
       return;
     }
   }
@@ -114,6 +114,8 @@ export class Orchestrator {
       if (job.status === "cancelled") return;
 
       const workDir = path.join(this.tempRoot, job.id);
+      job = this.store.updateJob(job.id, { progress: `Собираю итоговые PDF из ${sourcePdfs.length} файлов` });
+      await this.telegram.sendMessage(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
       const volumes = await buildKindleVolumes({
         sourcePdfs,
         destinationDir: path.join(workDir, "volumes"),
@@ -130,7 +132,8 @@ export class Orchestrator {
         if (queued.some((item) => item.filename === volume.fileName)) continue;
         job = this.store.getJob(job.id);
         if (job.status === "cancelled") return;
-        this.store.updateJob(job.id, { progress: `Передаю в Kindle: ${volume.fileName}` });
+        job = this.store.updateJob(job.id, { progress: `Передаю в Kindle: ${volume.fileName}` });
+        await this.telegram.sendMessage(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
         const kindleJob = await this.kindle.enqueueFile(volume.filePath, volume.fileName);
         queued.push({ id: kindleJob.id, filename: volume.fileName, size: kindleJob.size, status: kindleJob.status });
         this.store.updateJob(job.id, { kindleJobs: queued });
@@ -182,7 +185,8 @@ export class Orchestrator {
       const current = this.store.getJob(job.id);
       if (!current || current.status === "cancelled") return [];
       const chapter = chapters[index];
-      this.store.updateJob(job.id, { progress: `Скачано ${index}/${chapters.length}; обрабатываю ${chapter.title}` });
+      const processing = `Обрабатываю ${index + 1}/${chapters.length}: ${chapter.title}`;
+      this.store.updateJob(job.id, { progress: processing });
       const outputs = await this.mangaApp.processChapter({
         chapterId: chapter.id,
         mangaTitle: job.seriesTitle,
@@ -198,6 +202,8 @@ export class Orchestrator {
           filePath
         });
       }
+      const completed = `Обработано ${index + 1}/${chapters.length}: ${chapter.title}`;
+      this.store.updateJob(job.id, { progress: completed });
       if ((index + 1) % 3 === 0 || index + 1 === chapters.length) {
         await this.telegram.sendMessage(job.chatId, `Задание ${shortId(job.id)}: обработано ${index + 1}/${chapters.length} глав.`);
       }
@@ -229,7 +235,11 @@ export class Orchestrator {
         if (!wasWaiting) await this.sendKindleConnectUrl(job.chatId, job.id);
         return;
       }
-      this.store.updateJob(job.id, { status: "delivering", kindleJobs: entries, progress: "Amazon обрабатывает файлы" });
+      const progress = "Amazon обрабатывает файлы";
+      this.store.updateJob(job.id, { status: "delivering", kindleJobs: entries, progress });
+      if (job.progress !== progress) {
+        await this.telegram.sendMessage(job.chatId, `Задание ${shortId(job.id)}: ${progress}.`);
+      }
     } catch (error) {
       console.error("Delivery reconciliation failed", error);
     }
@@ -294,7 +304,7 @@ function describeJob(job) {
   const details = [
     `Статус: ${job.status}`,
     job.seriesTitle ? `Манга: ${job.seriesTitle}` : `Поиск: ${job.titleQuery}`,
-    job.fromChapter ? `От: ${job.fromChapter}` : null,
+    job.fromChapter ? `От: ${formatFromChapter(job.fromChapter)}` : null,
     job.toChapter ? `До: ${formatToChapter(job.toChapter)}` : null,
     `Merge vertical pages: ${job.mergeVerticalPages ? "вкл" : "выкл"}`,
     job.progress || null,
@@ -305,4 +315,14 @@ function describeJob(job) {
 
 function formatToChapter(value) {
   return !value || value === "latest" ? "последней" : value;
+}
+
+function formatFromChapter(value) {
+  return !value || value === "first" ? "первой" : value;
+}
+
+function formatChapterRange(from, to) {
+  return from === "first" && to === "latest"
+    ? "все главы"
+    : `главы ${formatFromChapter(from)}–${formatToChapter(to)}`;
 }

@@ -17,18 +17,18 @@ export function compareChapterNumbers(a, b) {
 }
 
 export function selectChapterRange(chapters, from, to = "latest") {
-  const start = normalizeChapterNumber(from);
+  const start = from === "first" || !from ? null : normalizeChapterNumber(from);
   const end = to === "latest" || !to ? null : normalizeChapterNumber(to);
   const selected = chapters
     .map((chapter) => ({ ...chapter, number: parseChapterLabel(chapter.title) }))
     .filter((chapter) => chapter.number &&
-      compareChapterNumbers(chapter.number, start) >= 0 &&
+      (!start || compareChapterNumbers(chapter.number, start) >= 0) &&
       (!end || compareChapterNumbers(chapter.number, end) <= 0));
 
   if (selected.length === 0) {
     throw new Error(end
       ? `Главы в диапазоне ${start}–${end} не найдены`
-      : `Главы ${start} и новее не найдены`);
+      : start ? `Главы ${start} и новее не найдены` : "Главы не найдены");
   }
   return selected;
 }

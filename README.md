@@ -59,6 +59,12 @@ volumes:
   `/data`;
 - the `kindle-pdf-queue` bucket temporarily stores PDFs between services.
 
+The Kindle queue advances after the Send action clears Amazon's `Ready to send`
+state without an immediate error. The later `In library` label is not a blocking
+delivery condition because device delivery can finish before that web status
+appears. A submitted file is not uploaded again merely because `In library` is
+delayed, including after a service restart.
+
 Secrets are never committed. Railway stores the Telegram token, webhook
 secret, web application password and session token, Kindle shared secret, and
 S3 credentials.
@@ -83,10 +89,12 @@ Example command:
 ```text
 Send The Fable from chapter 201 to latest
 Отправь One Piece (Color) с 23 до 100
+Отправь One Piece (Color) все главы
 ```
 
 Both numeric boundaries are inclusive, so the second example processes chapters
 23 through 100. Manga titles may contain spaces and parentheses.
+The `все главы` form automatically uses every available numbered chapter.
 
 Available commands include `/status`, `/cancel`, `/retry`, `/kindle`,
 `/merge on`, and `/merge off`. `Merge vertical pages` is enabled by default and

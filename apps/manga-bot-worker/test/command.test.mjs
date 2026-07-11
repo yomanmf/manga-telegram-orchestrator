@@ -26,6 +26,15 @@ test("parses an inclusive numeric chapter range with parentheses in the title", 
   );
 });
 
+test("parses all available chapters with parentheses in the title", () => {
+  assert.deepEqual(parseCommand("Отправь One Piece (Color) все главы"), {
+    type: "send",
+    titleQuery: "One Piece (Color)",
+    fromChapter: "first",
+    toChapter: "latest"
+  });
+});
+
 test("parses Merge vertical pages commands", () => {
   assert.deepEqual(parseCommand("/merge"), { type: "merge", enabled: null });
   assert.deepEqual(parseCommand("/merge on"), { type: "merge", enabled: true });
@@ -50,6 +59,15 @@ test("selects both ends of a numeric chapter range inclusively", () => {
     { id: "e", title: "Chapter 101" }
   ], "23", "100");
   assert.deepEqual(selected.map((item) => item.id), ["b", "c", "d"]);
+});
+
+test("selects every available numbered chapter", () => {
+  const selected = selectChapterRange([
+    { id: "a", title: "Chapter 0.5" },
+    { id: "b", title: "Chapter 1" },
+    { id: "c", title: "Special without a number" }
+  ], "first", "latest");
+  assert.deepEqual(selected.map((item) => item.id), ["a", "b"]);
 });
 
 test("deduplicates Telegram updates and persists jobs", () => {
@@ -109,14 +127,19 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
     tempRoot: `${directory}/work`
   });
 
-  await orchestrator.handleMessage({ chat: { id: 7 }, text: "Отправь One Piece (Color) с 23 до 24" });
+  await orchestrator.handleMessage({ chat: { id: 7 }, text: "Отправь One Piece (Color) все главы" });
   await orchestrator.tick();
 
   const job = store.latestJob("7");
   assert.equal(job.status, "completed");
-  assert.equal(job.toChapter, "24");
-  assert.equal(job.chapterManifest.length, 2);
-  assert.deepEqual(processedChapters, ["Chapter 23", "Chapter 24"]);
+  assert.equal(job.fromChapter, "first");
+  assert.equal(job.toChapter, "latest");
+  assert.equal(job.chapterManifest.length, 4);
+  assert.deepEqual(processedChapters, ["Chapter 22", "Chapter 23", "Chapter 24", "Chapter 25"]);
   assert.equal(job.kindleJobs.length, 1);
+  const chapterProgress = messages.filter(({ text }) => / обработано \d+\/\d+ глав\./.test(text));
+  assert.deepEqual(chapterProgress.map(({ text }) => text.match(/(\d+\/\d+)/)[1]), ["3/4", "4/4"]);
+  assert.ok(messages.some(({ text }) => text.includes("Собираю итоговые PDF")));
+  assert.ok(messages.some(({ text }) => text.includes("Передаю в Kindle")));
   assert.match(messages.at(-1).text, /Amazon подтвердил/);
 });
