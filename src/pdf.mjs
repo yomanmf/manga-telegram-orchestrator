@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PDFDocument } from "pdf-lib";
 
-export async function buildKindleVolumes({ sourcePdfs, destinationDir, baseName, maxBytes }) {
+export async function buildKindleVolumes({ sourcePdfs, destinationDir, baseName, maxBytes, mergeVerticalPages = true }) {
   await fs.mkdir(destinationDir, { recursive: true });
   if (sourcePdfs.length === 0) throw new Error("No PDF pages were produced");
 
@@ -10,7 +10,7 @@ export async function buildKindleVolumes({ sourcePdfs, destinationDir, baseName,
   // estimate and previously caused needless splitting even when the finished
   // combined PDF fitted into the Kindle limit.  If it really is too large,
   // split recursively at chapter boundaries.
-  const volumes = await renderWithinLimit(sourcePdfs, maxBytes);
+  const volumes = await renderWithinLimit(sourcePdfs, maxBytes, { mergeVerticalPages });
   if (volumes.length === 0) throw new Error("No PDF pages were produced");
 
   const output = [];
@@ -42,15 +42,15 @@ function buildVolumeFileName(baseName, sources, index, count) {
   return `${sanitize(`${baseName}${chapterRange}`)}${suffix}.pdf`;
 }
 
-async function renderWithinLimit(sources, maxBytes) {
-  const bytes = await mergePdfSources(sources);
+async function renderWithinLimit(sources, maxBytes, options) {
+  const bytes = await mergePdfSources(sources, options);
   if (bytes.length <= maxBytes) return [{ sources, bytes }];
   if (sources.length === 1) return [{ sources, bytes, oversize: true }];
 
   const splitAt = await balancedSplit(sources);
   return [
-    ...await renderWithinLimit(sources.slice(0, splitAt), maxBytes),
-    ...await renderWithinLimit(sources.slice(splitAt), maxBytes)
+    ...await renderWithinLimit(sources.slice(0, splitAt), maxBytes, options),
+    ...await renderWithinLimit(sources.slice(splitAt), maxBytes, options)
   ];
 }
 
@@ -70,22 +70,87 @@ async function sourceSize(source) {
   return (await fs.stat(source.filePath)).size;
 }
 
-export async function mergePdfBuffers(buffers) {
+export async function mergePdfBuffers(buffers, { mergeVerticalPages = false } = {}) {
   const target = await PDFDocument.create();
+  let pendingVertical = null;
+
+  async function flushPendingVertical() {
+    if (!pendingVertical) return;
+    await addSingleVerticalSpread(target, pendingVertical);
+    pendingVertical = null;
+  }
+
   for (const bytes of buffers) {
     const source = await PDFDocument.load(bytes, { ignoreEncryption: true });
-    const pages = await target.copyPages(source, source.getPageIndices());
-    for (const page of pages) target.addPage(page);
+    for (const index of source.getPageIndices()) {
+      const page = source.getPage(index);
+      const { width, height } = page.getSize();
+      if (mergeVerticalPages && width <= height) {
+        if (pendingVertical) {
+          await addVerticalPairSpread(target, pendingVertical, { page, width, height });
+          pendingVertical = null;
+        } else {
+          pendingVertical = { page, width, height };
+        }
+        continue;
+      }
+      await flushPendingVertical();
+      const [copied] = await target.copyPages(source, [index]);
+      target.addPage(copied);
+    }
   }
+  await flushPendingVertical();
   return Buffer.from(await target.save({ useObjectStreams: true }));
 }
 
-async function mergePdfSources(sources) {
+async function addSingleVerticalSpread(target, item) {
+  const embedded = await embedPageOrNull(target, item.page);
+  const spread = target.addPage([item.width * 2, item.height]);
+  if (embedded) {
+    spread.drawPage(embedded, { x: item.width, y: 0, width: item.width, height: item.height });
+  }
+}
+
+async function addVerticalPairSpread(target, first, second) {
+  const pageWidth = first.width + second.width;
+  const pageHeight = Math.max(first.height, second.height);
+  const embeddedFirst = await embedPageOrNull(target, first.page);
+  const embeddedSecond = await embedPageOrNull(target, second.page);
+  const spread = target.addPage([pageWidth, pageHeight]);
+  // Manga is read right-to-left: the earlier page belongs on the right.
+  if (embeddedSecond) {
+    spread.drawPage(embeddedSecond, {
+      x: 0,
+      y: (pageHeight - second.height) / 2,
+      width: second.width,
+      height: second.height
+    });
+  }
+  if (embeddedFirst) {
+    spread.drawPage(embeddedFirst, {
+      x: second.width,
+      y: (pageHeight - first.height) / 2,
+      width: first.width,
+      height: first.height
+    });
+  }
+}
+
+async function embedPageOrNull(target, page) {
+  try {
+    return await target.embedPage(page);
+  } catch (error) {
+    if (String(error?.message || error).includes("missing Contents")) return null;
+    throw error;
+  }
+}
+
+async function mergePdfSources(sources, options) {
   const buffers = [];
   for (const source of sources) {
     buffers.push(source.bytes || await fs.readFile(source.filePath));
   }
-  return mergePdfBuffers(buffers);
+  return mergePdfBuffers(buffers, options);
 }
 
 function sanitize(value) {

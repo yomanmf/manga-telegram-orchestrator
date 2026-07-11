@@ -44,7 +44,8 @@ test("deduplicates Telegram updates and persists jobs", () => {
 test("runs a Telegram request through PDF assembly and Kindle confirmation", async () => {
   const directory = `/tmp/manga-orchestrator-test-${Date.now()}-${Math.random()}`;
   const pdf = await PDFDocument.create();
-  pdf.addPage([300, 400]);
+  const page = pdf.addPage([300, 400]);
+  page.drawRectangle({ x: 0, y: 0, width: 1, height: 1 });
   const pagePdf = Buffer.from(await pdf.save());
   const messages = [];
   const store = createStore(directory);

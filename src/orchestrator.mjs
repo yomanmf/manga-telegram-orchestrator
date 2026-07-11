@@ -117,7 +117,8 @@ export class Orchestrator {
         sourcePdfs,
         destinationDir: path.join(workDir, "volumes"),
         baseName: job.seriesTitle,
-        maxBytes: this.maxPdfBytes
+        maxBytes: this.maxPdfBytes,
+        mergeVerticalPages: job.mergeVerticalPages
       });
       if (volumes.some((volume) => volume.oversize)) {
         throw new Error("Одна PDF-часть превышает безопасный лимит Kindle; требуется разбиение исходной главы");
