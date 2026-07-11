@@ -30,3 +30,28 @@ test("registers the command menu with Telegram", async () => {
     }
   ]);
 });
+
+test("retries a transient Telegram fetch failure", async () => {
+  const originalFetch = globalThis.fetch;
+  let attempts = 0;
+  globalThis.fetch = async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      const cause = new Error("socket closed");
+      cause.code = "UND_ERR_SOCKET";
+      throw new TypeError("fetch failed", { cause });
+    }
+    return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), {
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  try {
+    const result = await createTelegram("test-token", { retryDelays: [0] })
+      .sendMessage("7", "progress");
+    assert.deepEqual(result, { message_id: 1 });
+    assert.equal(attempts, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

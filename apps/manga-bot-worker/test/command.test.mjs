@@ -93,9 +93,16 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
   const pagePdf = Buffer.from(await pdf.save());
   const messages = [];
   const processedChapters = [];
+  let failedProgressNotification = false;
   const store = createStore(directory);
   const telegram = {
-    async sendMessage(chatId, text) { messages.push({ chatId, text }); },
+    async sendMessage(chatId, text) {
+      if (!failedProgressNotification && /обработано 3\/4 глав/.test(text)) {
+        failedProgressNotification = true;
+        throw new TypeError("fetch failed");
+      }
+      messages.push({ chatId, text });
+    },
     async answerCallbackQuery() {}
   };
   const mangaApp = {
@@ -137,8 +144,9 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
   assert.equal(job.chapterManifest.length, 4);
   assert.deepEqual(processedChapters, ["Chapter 22", "Chapter 23", "Chapter 24", "Chapter 25"]);
   assert.equal(job.kindleJobs.length, 1);
+  assert.equal(failedProgressNotification, true);
   const chapterProgress = messages.filter(({ text }) => / обработано \d+\/\d+ глав\./.test(text));
-  assert.deepEqual(chapterProgress.map(({ text }) => text.match(/(\d+\/\d+)/)[1]), ["3/4", "4/4"]);
+  assert.deepEqual(chapterProgress.map(({ text }) => text.match(/(\d+\/\d+)/)[1]), ["4/4"]);
   assert.ok(messages.some(({ text }) => text.includes("Собираю итоговые PDF")));
   assert.ok(messages.some(({ text }) => text.includes("Передаю в Kindle")));
   assert.match(messages.at(-1).text, /Amazon подтвердил/);

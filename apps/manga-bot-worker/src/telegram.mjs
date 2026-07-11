@@ -9,21 +9,38 @@ export const MENU_COMMANDS = [
   { command: "merge", description: "Configure vertical page merging" }
 ];
 
-export function createTelegram(token) {
+export function createTelegram(token, { retryDelays = [250, 1_000] } = {}) {
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN is required");
   const baseUrl = `${API}/bot${token}`;
 
   async function call(method, body) {
-    const response = await fetch(`${baseUrl}/${method}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) {
-      throw new Error(data.description || `Telegram ${method} failed (${response.status})`);
+    let lastError;
+    for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+      try {
+        const response = await fetch(`${baseUrl}/${method}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && data.ok) return data.result;
+
+        const error = new Error(data.description || `Telegram ${method} failed (${response.status})`);
+        if (!isRetryableStatus(response.status) || attempt === retryDelays.length) {
+          throw error;
+        }
+        lastError = error;
+        const retryAfter = Number(data.parameters?.retry_after);
+        await sleep(Number.isFinite(retryAfter) && retryAfter > 0
+          ? retryAfter * 1_000
+          : retryDelays[attempt]);
+      } catch (error) {
+        lastError = error;
+        if (!isTransportError(error) || attempt === retryDelays.length) throw error;
+        await sleep(retryDelays[attempt]);
+      }
     }
-    return data.result;
+    throw lastError;
   }
 
   return {
@@ -69,6 +86,18 @@ export function createTelegram(token) {
       });
     }
   };
+}
+
+function isRetryableStatus(status) {
+  return status === 429 || status >= 500;
+}
+
+function isTransportError(error) {
+  return error instanceof TypeError || Boolean(error?.cause?.code);
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 export function choicesKeyboard(job) {

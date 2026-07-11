@@ -96,7 +96,7 @@ export class Orchestrator {
     let job = initialJob;
     try {
       job = this.store.updateJob(job.id, { status: "processing", error: null, progress: "Определяю произведение" });
-      await this.telegram.sendMessage(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
+      await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
 
       job = await this.resolveSeries(job);
       if (job.status === "waiting_choice") return;
@@ -107,7 +107,7 @@ export class Orchestrator {
         chapterManifest: chapters,
         progress: `Зафиксирован диапазон: ${chapters[0].title} — ${chapters.at(-1).title} (${chapters.length} глав)`
       });
-      await this.telegram.sendMessage(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
+      await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
 
       const sourcePdfs = await this.processChapters(job);
       job = this.store.getJob(job.id);
@@ -115,7 +115,7 @@ export class Orchestrator {
 
       const workDir = path.join(this.tempRoot, job.id);
       job = this.store.updateJob(job.id, { progress: `Собираю итоговые PDF из ${sourcePdfs.length} файлов` });
-      await this.telegram.sendMessage(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
+      await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
       const volumes = await buildKindleVolumes({
         sourcePdfs,
         destinationDir: path.join(workDir, "volumes"),
@@ -133,7 +133,7 @@ export class Orchestrator {
         job = this.store.getJob(job.id);
         if (job.status === "cancelled") return;
         job = this.store.updateJob(job.id, { progress: `Передаю в Kindle: ${volume.fileName}` });
-        await this.telegram.sendMessage(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
+        await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
         const kindleJob = await this.kindle.enqueueFile(volume.filePath, volume.fileName);
         queued.push({ id: kindleJob.id, filename: volume.fileName, size: kindleJob.size, status: kindleJob.status });
         this.store.updateJob(job.id, { kindleJobs: queued });
@@ -143,14 +143,14 @@ export class Orchestrator {
         kindleJobs: queued,
         progress: `PDF переданы в Kindle uploader: ${queued.length} шт.`
       });
-      await this.telegram.sendMessage(job.chatId, `Задание ${shortId(job.id)}: собрано и поставлено в Kindle-очередь ${queued.length} PDF.`);
+      await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: собрано и поставлено в Kindle-очередь ${queued.length} PDF.`);
       await this.reconcileDelivery(job);
     } catch (error) {
       const latest = this.store.getJob(initialJob.id);
       if (latest?.status === "cancelled") return;
       const message = errorMessage(error);
       this.store.updateJob(initialJob.id, { status: "failed", error: message, progress: "Ошибка" });
-      await this.telegram.sendMessage(initialJob.chatId, `Задание ${shortId(initialJob.id)} остановлено: ${message}\n/retry — повторить.`);
+      await this.sendProgress(initialJob.chatId, `Задание ${shortId(initialJob.id)} остановлено: ${message}\n/retry — повторить.`);
     }
   }
 
@@ -205,7 +205,7 @@ export class Orchestrator {
       const completed = `Обработано ${index + 1}/${chapters.length}: ${chapter.title}`;
       this.store.updateJob(job.id, { progress: completed });
       if ((index + 1) % 3 === 0 || index + 1 === chapters.length) {
-        await this.telegram.sendMessage(job.chatId, `Задание ${shortId(job.id)}: обработано ${index + 1}/${chapters.length} глав.`);
+        await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: обработано ${index + 1}/${chapters.length} глав.`);
       }
     }
     return sources;
@@ -293,6 +293,14 @@ export class Orchestrator {
       await this.telegram.sendMessage(chatId, `${jobId ? `Задание ${shortId(jobId)}: ` : ""}Amazon требует вход. Откройте одноразовую ссылку в течение 10 минут:\n${result.url}`);
     } catch (error) {
       await this.telegram.sendMessage(chatId, `Не удалось открыть Amazon-вход: ${errorMessage(error)}`);
+    }
+  }
+
+  async sendProgress(chatId, text) {
+    try {
+      await this.telegram.sendMessage(chatId, text);
+    } catch (error) {
+      console.error("Telegram progress notification failed", error);
     }
   }
 }
