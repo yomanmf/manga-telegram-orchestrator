@@ -1,5 +1,14 @@
 const API = "https://api.telegram.org";
 
+export const MENU_COMMANDS = [
+  { command: "start", description: "Show help" },
+  { command: "status", description: "Show the current job" },
+  { command: "cancel", description: "Cancel the active job" },
+  { command: "retry", description: "Retry the last failed job" },
+  { command: "kindle", description: "Check Kindle connection" },
+  { command: "merge", description: "Configure vertical page merging" }
+];
+
 export function createTelegram(token) {
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN is required");
   const baseUrl = `${API}/bot${token}`;
@@ -52,6 +61,12 @@ export function createTelegram(token) {
         allowed_updates: ["message", "callback_query"],
         drop_pending_updates: false
       });
+    },
+    async configureMenu() {
+      await call("setMyCommands", { commands: MENU_COMMANDS });
+      return call("setChatMenuButton", {
+        menu_button: { type: "commands" }
+      });
     }
   };
 }
@@ -72,4 +87,3 @@ function trim(value, max) {
   const text = String(value || "");
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
-

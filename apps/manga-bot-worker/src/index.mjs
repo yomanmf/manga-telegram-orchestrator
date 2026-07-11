@@ -80,6 +80,7 @@ const server = app.listen(config.port, () => {
   console.log(`Manga Telegram orchestrator listening on ${config.port}`);
   if (ready) {
     orchestrator.start();
+    configureTelegramMenu().catch((error) => console.error("Telegram menu setup failed", error));
     configureWebhook().catch((error) => console.error("Telegram webhook setup failed", error));
   }
   else console.warn(`Setup required. Missing: ${missingConfiguration.join(", ")}`);
@@ -134,4 +135,9 @@ async function configureWebhook() {
   }
   const result = await telegram.setWebhook(`${config.publicBaseUrl}/telegram/webhook`, config.webhookSecret);
   console.log(`Telegram webhook configured: ${result.description || "ok"}`);
+}
+
+async function configureTelegramMenu() {
+  const result = await telegram.configureMenu();
+  console.log(`Telegram command menu configured: ${result.description || "ok"}`);
 }
