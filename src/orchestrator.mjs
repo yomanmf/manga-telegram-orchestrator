@@ -130,7 +130,7 @@ export class Orchestrator {
         if (job.status === "cancelled") return;
         this.store.updateJob(job.id, { progress: `Передаю в Kindle: ${volume.fileName}` });
         const kindleJob = await this.kindle.enqueueFile(volume.filePath, volume.fileName);
-        queued.push({ id: kindleJob.id, filename: volume.fileName, status: kindleJob.status });
+        queued.push({ id: kindleJob.id, filename: volume.fileName, size: kindleJob.size, status: kindleJob.status });
         this.store.updateJob(job.id, { kindleJobs: queued });
       }
       job = this.store.updateJob(job.id, {
@@ -236,7 +236,23 @@ export class Orchestrator {
   async sendStatus(chatId) {
     const job = this.store.latestJob(chatId);
     if (!job) return this.telegram.sendMessage(chatId, "Заданий пока нет.");
-    await this.telegram.sendMessage(chatId, `Задание ${shortId(job.id)}\n${describeJob(job)}${job.error ? `\nОшибка: ${job.error}` : ""}`);
+    const files = await this.describeKindleFiles(job.kindleJobs);
+    await this.telegram.sendMessage(chatId, `Задание ${shortId(job.id)}\n${describeJob(job)}${files ? `\n${files}` : ""}${job.error ? `\nОшибка: ${job.error}` : ""}`);
+  }
+
+  async describeKindleFiles(entries) {
+    if (!entries?.length) return "";
+    const details = await Promise.all(entries.map(async (entry) => {
+      try {
+        const response = await this.kindle.job(entry.id);
+        const current = response.job;
+        const size = Number.isFinite(Number(current.size)) ? formatMegabytes(current.size) : "размер неизвестен";
+        return `• ${current.filename || entry.filename} — ${size}, ${current.status}`;
+      } catch {
+        return `• ${entry.filename} — ${entry.size ? formatMegabytes(entry.size) : "размер неизвестен"}, ${entry.status}`;
+      }
+    }));
+    return `PDF в Kindle:\n${details.join("\n")}`;
   }
 
   async cancel(chatId) {
@@ -271,6 +287,7 @@ export class Orchestrator {
 
 function shortId(id) { return String(id).slice(0, 8); }
 function errorMessage(error) { return error instanceof Error ? error.message : String(error); }
+function formatMegabytes(bytes) { return `${(Number(bytes) / 1_000_000).toFixed(1)} МБ`; }
 function describeJob(job) {
   const details = [
     `Статус: ${job.status}`,
