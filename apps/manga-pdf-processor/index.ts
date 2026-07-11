@@ -7301,10 +7301,3 @@ function assertValidSize(width, height, label) {
 
 
 export default app;
-
-if (import.meta.main) {
-  Bun.serve({
-    port: Number(process.env.PORT || 3000),
-    fetch: app.fetch
-  });
-}
