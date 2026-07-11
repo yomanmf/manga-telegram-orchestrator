@@ -6,7 +6,7 @@ COPY package.json package-lock.json ./
 RUN bun install --production
 RUN bun -e 'import sharp from "sharp"; await sharp({ create: { width: 1, height: 1, channels: 4, background: "#fff" } }).png().toBuffer()'
 
-COPY index.ts pdf-merge-contract.mjs pdf-utils.mjs ./
+COPY index.ts pdf-merge-contract.mjs pdf-utils.mjs kindle-job-contract.mjs ./
 
 ENV NODE_ENV=production
 

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { PDFDocument } from "pdf-lib";
 import JSZip from "jszip";
+import { classifyKindleSentJob } from "./kindle-job-contract.mjs";
 
 const app = new Hono();
 
@@ -1128,6 +1129,8 @@ const htmlContent = `<!DOCTYPE html>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <script>
+    ${classifyKindleSentJob.toString()}
+
 
     const uploadArea =
       document.getElementById("uploadArea");
@@ -3987,18 +3990,22 @@ const htmlContent = `<!DOCTYPE html>
         const job = data.job || {};
 
         if (job.status === "sent") {
-          if (
-            job.amazonStatus !==
-              "in_library"
-          ) {
+          const delivery =
+            classifyKindleSentJob(job);
+
+          if (!delivery.accepted) {
             throw new Error(
-              "Worker marked the file sent without Amazon library confirmation"
+              "Worker marked the file sent without Amazon submission confirmation"
             );
           }
 
           progressText.textContent =
-            "Confirmed in Amazon library: " +
-            fileName;
+            delivery.confirmation ===
+              "in_library"
+              ? "Confirmed in Amazon library: " +
+                fileName
+              : "Accepted by Amazon; delivery to the library continues: " +
+                fileName;
 
           return job;
         }
@@ -4021,7 +4028,7 @@ const htmlContent = `<!DOCTYPE html>
 
         if (job.status === "verifying") {
           progressText.textContent =
-            "Waiting for Amazon to confirm In Library: " +
+            "Waiting for Amazon to accept the submission: " +
             fileName;
         } else if (job.status === "processing") {
           progressText.textContent =
@@ -4044,7 +4051,7 @@ const htmlContent = `<!DOCTYPE html>
 
 
       throw new Error(
-        "Timed out waiting for Amazon to confirm " +
+        "Timed out waiting for Amazon to accept " +
           fileName
       );
 
