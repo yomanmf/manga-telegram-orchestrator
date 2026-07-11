@@ -21,6 +21,10 @@ import {
   evaluateSubmissionEvidence,
   normalizeLoadedJob
 } from "./submission.mjs";
+import {
+  CHROMIUM_SINGLETON_FILES,
+  isChromiumProfileLockError
+} from "./chromium-profile.mjs";
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || "/data";
@@ -503,19 +507,7 @@ async function ensureBrowser() {
   browserStarting = (async () => {
     console.log("Starting Chromium for Kindle work");
     await ensureDisplayRuntime();
-    const context = await chromium.launchPersistentContext(
-      PROFILE_DIR,
-      {
-        headless: false,
-        viewport: { width: 1400, height: 820 },
-        acceptDownloads: false,
-        args: [
-          "--no-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-blink-features=AutomationControlled"
-        ]
-      }
-    );
+    const context = await launchKindleBrowser();
 
     browserContext = context;
     const pages = context.pages();
@@ -539,6 +531,34 @@ async function ensureBrowser() {
   } finally {
     browserStarting = null;
   }
+}
+
+async function launchKindleBrowser() {
+  const options = {
+    headless: false,
+    viewport: { width: 1400, height: 820 },
+    acceptDownloads: false,
+    args: [
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-blink-features=AutomationControlled"
+    ]
+  };
+
+  try {
+    return await chromium.launchPersistentContext(PROFILE_DIR, options);
+  } catch (error) {
+    if (!isChromiumProfileLockError(error)) throw error;
+    await clearStaleChromiumLocks();
+    console.warn("Removed stale Chromium profile locks; retrying browser startup");
+    return chromium.launchPersistentContext(PROFILE_DIR, options);
+  }
+}
+
+async function clearStaleChromiumLocks() {
+  await Promise.all(CHROMIUM_SINGLETON_FILES.map((name) =>
+    fsp.rm(path.join(PROFILE_DIR, name), { force: true })
+  ));
 }
 
 function displayProcessRunning(process) {

@@ -5,6 +5,7 @@ import {
   evaluateSubmissionEvidence,
   normalizeLoadedJob
 } from "./submission.mjs";
+import { isChromiumProfileLockError } from "./chromium-profile.mjs";
 
 test("accepts a submission after Amazon clears the ready row", () => {
   assert.deepEqual(evaluateSubmissionEvidence(
@@ -44,4 +45,11 @@ test("resumes a submitted verifying job without uploading it again", () => {
     submittedAt: "2026-07-11T20:09:28.756Z",
     resumeSubmission: true
   });
+});
+
+test("recognizes a stale Chromium profile lock", () => {
+  assert.equal(isChromiumProfileLockError(
+    new Error("process_singleton_posix: The profile appears to be in use")
+  ), true);
+  assert.equal(isChromiumProfileLockError(new Error("Amazon session expired")), false);
 });

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check submission.mjs",
+    "check": "node --check server.mjs && node --check submission.mjs && node --check chromium-profile.mjs",
     "test": "node --test *.test.mjs"
   },
   "dependencies": {
