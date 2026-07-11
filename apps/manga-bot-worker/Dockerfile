@@ -8,7 +8,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
-RUN --mount=type=cache,id=manga-bot-worker-npm,target=/root/.npm npm ci --omit=dev
+RUN npm ci --omit=dev
 
 COPY src ./src
 COPY test ./test

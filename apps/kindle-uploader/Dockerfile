@@ -18,7 +18,7 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV DISPLAY=:99
 
 COPY package.json package-lock.json ./
-RUN --mount=type=cache,id=kindle-uploader-npm,target=/root/.npm npm ci --omit=dev
+RUN npm ci --omit=dev
 
 COPY server.mjs start.sh ./
 RUN chmod +x /app/start.sh
