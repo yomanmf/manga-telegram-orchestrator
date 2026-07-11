@@ -16,15 +16,19 @@ export function compareChapterNumbers(a, b) {
   return Number(aMinor.padEnd(width, "0") || 0) - Number(bMinor.padEnd(width, "0") || 0);
 }
 
-export function selectChapterRange(chapters, from) {
+export function selectChapterRange(chapters, from, to = "latest") {
   const start = normalizeChapterNumber(from);
+  const end = to === "latest" || !to ? null : normalizeChapterNumber(to);
   const selected = chapters
     .map((chapter) => ({ ...chapter, number: parseChapterLabel(chapter.title) }))
-    .filter((chapter) => chapter.number && compareChapterNumbers(chapter.number, start) >= 0);
+    .filter((chapter) => chapter.number &&
+      compareChapterNumbers(chapter.number, start) >= 0 &&
+      (!end || compareChapterNumbers(chapter.number, end) <= 0));
 
   if (selected.length === 0) {
-    throw new Error(`Главы ${start} и новее не найдены`);
+    throw new Error(end
+      ? `Главы в диапазоне ${start}–${end} не найдены`
+      : `Главы ${start} и новее не найдены`);
   }
   return selected;
 }
-

@@ -9,8 +9,21 @@ import { PDFDocument } from "pdf-lib";
 
 test("parses Russian Kindle range command", () => {
   assert.deepEqual(parseCommand("Отправь мне на Kindle Fable с главы 201 до самой последней"), {
-    type: "send", titleQuery: "Fable", fromChapter: "201", to: "latest"
+    type: "send", titleQuery: "Fable", fromChapter: "201", toChapter: "latest"
   });
+});
+
+test("parses an inclusive numeric chapter range with parentheses in the title", () => {
+  assert.deepEqual(parseCommand("Отправь One Piece (Color) с 23 до 100"), {
+    type: "send",
+    titleQuery: "One Piece (Color)",
+    fromChapter: "23",
+    toChapter: "100"
+  });
+  assert.throws(
+    () => parseCommand("Отправь One Piece (Color) с 100 до 23"),
+    /Конечная глава/
+  );
 });
 
 test("parses Merge vertical pages commands", () => {
@@ -28,14 +41,27 @@ test("uses chapter labels rather than list position", () => {
   assert.deepEqual(selected.map((item) => item.id), ["b", "c"]);
 });
 
+test("selects both ends of a numeric chapter range inclusively", () => {
+  const selected = selectChapterRange([
+    { id: "a", title: "Chapter 22" },
+    { id: "b", title: "Chapter 23" },
+    { id: "c", title: "Chapter 99.5" },
+    { id: "d", title: "Chapter 100" },
+    { id: "e", title: "Chapter 101" }
+  ], "23", "100");
+  assert.deepEqual(selected.map((item) => item.id), ["b", "c", "d"]);
+});
+
 test("deduplicates Telegram updates and persists jobs", () => {
   const directory = `/tmp/manga-store-test-${Date.now()}-${Math.random()}`;
   const store = createStore(directory);
   assert.equal(store.rememberUpdate(42), true);
   assert.equal(store.rememberUpdate(42), false);
-  const job = store.createJob({ chatId: "7", status: "queued", titleQuery: "Fable", fromChapter: "201" });
+  const job = store.createJob({ chatId: "7", status: "queued", titleQuery: "Fable", fromChapter: "23", toChapter: "100" });
   assert.equal(store.latestJob("7").id, job.id);
   assert.equal(job.mergeVerticalPages, true);
+  assert.equal(job.fromChapter, "23");
+  assert.equal(job.toChapter, "100");
   assert.equal(store.getMergeVerticalPages("7"), true);
   store.setMergeVerticalPages("7", false);
   assert.equal(store.getMergeVerticalPages("7"), false);
@@ -48,25 +74,28 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
   page.drawRectangle({ x: 0, y: 0, width: 1, height: 1 });
   const pagePdf = Buffer.from(await pdf.save());
   const messages = [];
+  const processedChapters = [];
   const store = createStore(directory);
   const telegram = {
     async sendMessage(chatId, text) { messages.push({ chatId, text }); },
     async answerCallbackQuery() {}
   };
   const mangaApp = {
-    async search() { return { results: [{ title: "Fable", url: "/fable" }] }; },
+    async search() { return { results: [{ title: "One Piece (Color)", url: "/one-piece-color" }] }; },
     async loadSeries() {
       return {
-        title: "Fable",
+        title: "One Piece (Color)",
         chapters: [
-          { id: "ch-200", title: "Chapter 200" },
-          { id: "ch-201", title: "Chapter 201" },
-          { id: "ch-202", title: "Chapter 202" }
+          { id: "ch-22", title: "Chapter 22" },
+          { id: "ch-23", title: "Chapter 23" },
+          { id: "ch-24", title: "Chapter 24" },
+          { id: "ch-25", title: "Chapter 25" }
         ]
       };
     },
-    async processChapter({ shouldMerge }) {
+    async processChapter({ chapterTitle, shouldMerge }) {
       assert.equal(shouldMerge, true);
+      processedChapters.push(chapterTitle);
       return [{ name: "chapter.pdf", bytes: pagePdf }];
     }
   };
@@ -80,12 +109,14 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
     tempRoot: `${directory}/work`
   });
 
-  await orchestrator.handleMessage({ chat: { id: 7 }, text: "Отправь Fable с 201 до последней" });
+  await orchestrator.handleMessage({ chat: { id: 7 }, text: "Отправь One Piece (Color) с 23 до 24" });
   await orchestrator.tick();
 
   const job = store.latestJob("7");
   assert.equal(job.status, "completed");
+  assert.equal(job.toChapter, "24");
   assert.equal(job.chapterManifest.length, 2);
+  assert.deepEqual(processedChapters, ["Chapter 23", "Chapter 24"]);
   assert.equal(job.kindleJobs.length, 1);
   assert.match(messages.at(-1).text, /Amazon подтвердил/);
 });

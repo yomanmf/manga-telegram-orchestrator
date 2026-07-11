@@ -82,7 +82,11 @@ Example command:
 
 ```text
 Send The Fable from chapter 201 to latest
+Отправь One Piece (Color) с 23 до 100
 ```
+
+Both numeric boundaries are inclusive, so the second example processes chapters
+23 through 100. Manga titles may contain spaces and parentheses.
 
 Available commands include `/status`, `/cancel`, `/retry`, `/kindle`,
 `/merge on`, and `/merge off`. `Merge vertical pages` is enabled by default and

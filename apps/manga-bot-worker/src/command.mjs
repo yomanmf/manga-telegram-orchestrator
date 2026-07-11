@@ -1,6 +1,6 @@
 const SEND_PATTERNS = [
-  /^(?:отправь|пришли|скинь)\s+(?:мне\s+)?(?:на\s+kindle\s+)?(.+?)\s+с\s+(?:главы\s+)?([\d.,]+)\s+(?:до|по)\s+(?:самой\s+)?(?:последней|последней\s+главы|latest)$/i,
-  /^(?:send)\s+(.+?)\s+(?:from)\s+(?:chapter\s+)?([\d.]+)\s+(?:to)\s+(?:latest|last)$/i
+  /^(?:отправь|пришли|скинь)\s+(?:мне\s+)?(?:на\s+kindle\s+)?(.+?)\s+с\s+(?:главы\s+)?([\d.,]+)\s+(?:до|по)\s+(?:самой\s+)?((?:последней(?:\s+главы)?)|latest|[\d.,]+)$/i,
+  /^(?:send)\s+(.+?)\s+(?:from)\s+(?:chapter\s+)?([\d.]+)\s+(?:to)\s+((?:latest|last)|[\d.]+)$/i
 ];
 
 export function parseCommand(text) {
@@ -9,11 +9,18 @@ export function parseCommand(text) {
   for (const pattern of SEND_PATTERNS) {
     const match = input.match(pattern);
     if (match) {
+      const fromChapter = normalizeChapterNumber(match[2]);
+      const toChapter = /^(?:последней(?:\s+главы)?|latest|last)$/i.test(match[3])
+        ? "latest"
+        : normalizeChapterNumber(match[3]);
+      if (toChapter !== "latest" && Number(toChapter) < Number(fromChapter)) {
+        throw new Error("Конечная глава не может быть меньше начальной");
+      }
       return {
         type: "send",
         titleQuery: cleanTitle(match[1]),
-        fromChapter: normalizeChapterNumber(match[2]),
-        to: "latest"
+        fromChapter,
+        toChapter
       };
     }
   }
@@ -71,6 +78,7 @@ export function helpText() {
     "",
     "Пример:",
     "Отправь Fable с 201 до последней",
+    "Отправь One Piece (Color) с 23 до 100",
     "",
     "Команды: /status, /cancel, /retry, /kindle, /merge [on|off]"
   ].join("\n");

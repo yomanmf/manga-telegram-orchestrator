@@ -38,12 +38,13 @@ class Store {
     this.db.prepare(`
       INSERT INTO jobs (
         id, chat_id, status, title_query, series_url, series_title,
-        from_chapter, chapter_manifest, choice_manifest, progress,
+        from_chapter, to_chapter, chapter_manifest, choice_manifest, progress,
         kindle_jobs, merge_vertical_pages, error, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, String(job.chatId), job.status || "queued", job.titleQuery || null,
       job.seriesUrl || null, job.seriesTitle || null, job.fromChapter || null,
+      job.toChapter || "latest",
       json(job.chapterManifest || []), json(job.choiceManifest || []),
       job.progress || "", json(job.kindleJobs || []), job.mergeVerticalPages === false ? 0 : 1, job.error || null,
       timestamp, timestamp
@@ -100,6 +101,7 @@ class Store {
     const map = {
       status: "status", titleQuery: "title_query", seriesUrl: "series_url",
       seriesTitle: "series_title", fromChapter: "from_chapter",
+      toChapter: "to_chapter",
       chapterManifest: "chapter_manifest", choiceManifest: "choice_manifest",
       progress: "progress", kindleJobs: "kindle_jobs", error: "error"
     };
@@ -156,6 +158,7 @@ function migrate(db) {
       series_url TEXT,
       series_title TEXT,
       from_chapter TEXT,
+      to_chapter TEXT NOT NULL DEFAULT 'latest',
       chapter_manifest TEXT NOT NULL DEFAULT '[]',
       choice_manifest TEXT NOT NULL DEFAULT '[]',
       progress TEXT NOT NULL DEFAULT '',
@@ -174,6 +177,7 @@ function migrate(db) {
     );
   `);
   ensureColumn(db, "jobs", "merge_vertical_pages", "INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(db, "jobs", "to_chapter", "TEXT NOT NULL DEFAULT 'latest'");
 }
 
 function ensureColumn(db, table, column, definition) {
@@ -191,6 +195,7 @@ function hydrateJob(row) {
     seriesUrl: row.series_url,
     seriesTitle: row.series_title,
     fromChapter: row.from_chapter,
+    toChapter: row.to_chapter || "latest",
     chapterManifest: parseJson(row.chapter_manifest, []),
     choiceManifest: parseJson(row.choice_manifest, []),
     kindleJobs: parseJson(row.kindle_jobs, []),

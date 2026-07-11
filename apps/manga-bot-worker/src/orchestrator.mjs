@@ -46,10 +46,11 @@ export class Orchestrator {
         status: "queued",
         titleQuery: parsed.titleQuery,
         fromChapter: parsed.fromChapter,
+        toChapter: parsed.toChapter,
         mergeVerticalPages: this.store.getMergeVerticalPages(chatId),
         progress: "Задание принято, ищу мангу"
       });
-      await this.telegram.sendMessage(chatId, `Задание ${shortId(job.id)} принято: «${parsed.titleQuery}», главы ${parsed.fromChapter}–последняя.`);
+      await this.telegram.sendMessage(chatId, `Задание ${shortId(job.id)} принято: «${parsed.titleQuery}», главы ${parsed.fromChapter}–${formatToChapter(parsed.toChapter)}.`);
       return;
     }
   }
@@ -100,7 +101,7 @@ export class Orchestrator {
       job = await this.resolveSeries(job);
       if (job.status === "waiting_choice") return;
       const series = await this.mangaApp.loadSeries(job.seriesUrl);
-      const chapters = selectChapterRange(series.chapters, job.fromChapter);
+      const chapters = selectChapterRange(series.chapters, job.fromChapter, job.toChapter);
       job = this.store.updateJob(job.id, {
         seriesTitle: series.title,
         chapterManifest: chapters,
@@ -294,9 +295,14 @@ function describeJob(job) {
     `Статус: ${job.status}`,
     job.seriesTitle ? `Манга: ${job.seriesTitle}` : `Поиск: ${job.titleQuery}`,
     job.fromChapter ? `От: ${job.fromChapter}` : null,
+    job.toChapter ? `До: ${formatToChapter(job.toChapter)}` : null,
     `Merge vertical pages: ${job.mergeVerticalPages ? "вкл" : "выкл"}`,
     job.progress || null,
     job.kindleJobs?.length ? `PDF в Kindle: ${job.kindleJobs.length}` : null
   ].filter(Boolean);
   return details.join("\n");
+}
+
+function formatToChapter(value) {
+  return !value || value === "latest" ? "последней" : value;
 }
