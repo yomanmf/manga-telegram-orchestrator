@@ -1,0 +1,21 @@
+{
+  "name": "manga-telegram-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "check": "node --check src/index.mjs && node --check src/command.mjs && node --check src/orchestrator.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "express": "^5.1.0",
+    "jszip": "^3.10.1",
+    "pdf-lib": "^1.17.1"
+  }
+}
+
