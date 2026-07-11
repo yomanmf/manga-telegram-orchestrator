@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 
 import { parseCommand } from "../src/command.mjs";
 import { selectChapterRange } from "../src/chapters.mjs";
@@ -150,4 +151,92 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
   assert.ok(messages.some(({ text }) => text.includes("Собираю итоговые PDF")));
   assert.ok(messages.some(({ text }) => text.includes("Передаю в Kindle")));
   assert.match(messages.at(-1).text, /Amazon подтвердил/);
+  await assert.rejects(fs.access(`${directory}/work/${job.id}`), /ENOENT/);
+});
+
+test("cleans the job workspace after a processing failure", async () => {
+  const directory = `/tmp/manga-orchestrator-cleanup-test-${Date.now()}-${Math.random()}`;
+  const pdf = await PDFDocument.create();
+  pdf.addPage([300, 400]).drawRectangle({ x: 0, y: 0, width: 1, height: 1 });
+  const pagePdf = Buffer.from(await pdf.save());
+  const store = createStore(directory);
+  let processed = 0;
+  const orchestrator = new Orchestrator({
+    store,
+    telegram: { async sendMessage() {}, async answerCallbackQuery() {} },
+    mangaApp: {
+      async search() { return { results: [{ title: "Cleanup", url: "/cleanup" }] }; },
+      async loadSeries() {
+        return {
+          title: "Cleanup",
+          chapters: [
+            { id: "one", title: "Chapter 1" },
+            { id: "two", title: "Chapter 2" }
+          ]
+        };
+      },
+      async processChapter() {
+        processed += 1;
+        if (processed === 2) throw new Error("processor unavailable");
+        return [{ name: "chapter.pdf", bytes: pagePdf }];
+      }
+    },
+    kindle: {
+      async enqueueFile() { throw new Error("must not enqueue"); },
+      async job() { throw new Error("must not inspect"); },
+      async connectToken() { return { url: "https://example.test/connect" }; }
+    },
+    maxPdfBytes: 10_000_000,
+    tempRoot: `${directory}/work`
+  });
+
+  await orchestrator.handleMessage({ chat: { id: 8 }, text: "Отправь Cleanup с 1 до 2" });
+  await orchestrator.tick();
+
+  const job = store.latestJob("8");
+  assert.equal(job.status, "failed");
+  assert.match(job.error, /processor unavailable/);
+  await assert.rejects(fs.access(`${directory}/work/${job.id}`), /ENOENT/);
+});
+
+test("cleans the job workspace after cancellation during processing", async () => {
+  const directory = `/tmp/manga-orchestrator-cancel-test-${Date.now()}-${Math.random()}`;
+  const pdf = await PDFDocument.create();
+  pdf.addPage([300, 400]).drawRectangle({ x: 0, y: 0, width: 1, height: 1 });
+  const pagePdf = Buffer.from(await pdf.save());
+  const store = createStore(directory);
+  const orchestrator = new Orchestrator({
+    store,
+    telegram: { async sendMessage() {}, async answerCallbackQuery() {} },
+    mangaApp: {
+      async search() { return { results: [{ title: "Cancel", url: "/cancel" }] }; },
+      async loadSeries() {
+        return {
+          title: "Cancel",
+          chapters: [
+            { id: "one", title: "Chapter 1" },
+            { id: "two", title: "Chapter 2" }
+          ]
+        };
+      },
+      async processChapter() {
+        store.cancelLatest("9");
+        return [{ name: "chapter.pdf", bytes: pagePdf }];
+      }
+    },
+    kindle: {
+      async enqueueFile() { throw new Error("must not enqueue"); },
+      async job() { throw new Error("must not inspect"); },
+      async connectToken() { return { url: "https://example.test/connect" }; }
+    },
+    maxPdfBytes: 10_000_000,
+    tempRoot: `${directory}/work`
+  });
+
+  await orchestrator.handleMessage({ chat: { id: 9 }, text: "Отправь Cancel с 1 до 2" });
+  await orchestrator.tick();
+
+  const job = store.latestJob("9");
+  assert.equal(job.status, "cancelled");
+  await assert.rejects(fs.access(`${directory}/work/${job.id}`), /ENOENT/);
 });

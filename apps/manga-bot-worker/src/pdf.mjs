@@ -2,52 +2,56 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PDFDocument } from "pdf-lib";
 
-export async function buildKindleVolumes({ sourcePdfs, destinationDir, baseName, maxBytes, mergeVerticalPages = true }) {
-  await fs.mkdir(destinationDir, { recursive: true });
+export async function buildKindleVolumes({ sourcePdfs, destinationDir, baseName, maxBytes, mergeVerticalPages = true, metrics = null }) {
   if (sourcePdfs.length === 0) throw new Error("No PDF pages were produced");
+  await fs.rm(destinationDir, { recursive: true, force: true });
+  await fs.mkdir(destinationDir, { recursive: true });
 
-  const collector = createPdfCollector({ maxBytes, mergeVerticalPages });
+  const collector = createPdfCollector({
+    maxBytes,
+    mergeVerticalPages,
+    metrics,
+    async emitVolume(volume, index) {
+      const temporaryPath = path.join(destinationDir, `.volume-${String(index + 1).padStart(4, "0")}.pdf`);
+      await fs.writeFile(temporaryPath, volume.bytes);
+      return {
+        temporaryPath,
+        size: volume.bytes.length,
+        oversize: volume.oversize,
+        sources: volume.sources
+      };
+    }
+  });
+
   for (const source of sourcePdfs) await collector.add(source);
   const volumes = await collector.finish();
-
   const output = [];
   for (let index = 0; index < volumes.length; index += 1) {
-    const fileName = buildVolumeFileName(baseName, volumes[index].sources, index, volumes.length);
+    const volume = volumes[index];
+    const fileName = buildVolumeFileName(baseName, volume.sources, index, volumes.length);
     const filePath = path.join(destinationDir, fileName);
-    await fs.writeFile(filePath, volumes[index].bytes);
+    await fs.rename(volume.temporaryPath, filePath);
     output.push({
       fileName,
       filePath,
-      size: volumes[index].bytes.length,
-      oversize: Boolean(volumes[index].oversize),
-      sources: volumes[index].sources.map((source) => source.name)
+      size: volume.size,
+      oversize: Boolean(volume.oversize),
+      sources: volume.sources.map((source) => source.name)
     });
   }
   return output;
 }
 
-// The collector mirrors the browser implementation. In particular it holds
-// only the final vertical page of each source PDF, so a cross-source RTL pair
-// is made only when the next source starts with a vertical page and the pair
-// fits in the current Kindle volume.
-function createPdfCollector({ maxBytes, mergeVerticalPages }) {
-  let currentPdf = null;
+// The collector checkpoints once per source PDF (normally one manga chapter).
+// It falls back to per-page checkpoints only if a single source cannot fit in
+// an empty Kindle volume. The final vertical page is retained solely until the
+// next source so cross-source RTL pairing remains identical to the web flow.
+function createPdfCollector({ maxBytes, mergeVerticalPages, metrics = null, emitVolume = async (volume) => volume }) {
   let currentBytes = null;
   let currentHasPages = false;
   let currentSources = [];
   let pendingSinglePage = null;
   const volumes = [];
-
-  async function newPdf() {
-    currentPdf = await PDFDocument.create();
-    currentBytes = null;
-    currentHasPages = false;
-    currentSources = [];
-  }
-
-  async function ensurePdf() {
-    if (!currentPdf) await newPdf();
-  }
 
   function assertPageSize(width, height, label) {
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
@@ -77,9 +81,11 @@ function createPdfCollector({ maxBytes, mergeVerticalPages }) {
     return result;
   }
 
-  function rememberSources(operation) {
-    for (const source of operationSources(operation)) {
-      if (!currentSources.includes(source)) currentSources.push(source);
+  function rememberSources(operations) {
+    for (const operation of operations) {
+      for (const source of operationSources(operation)) {
+        if (!currentSources.includes(source)) currentSources.push(source);
+      }
     }
   }
 
@@ -96,7 +102,6 @@ function createPdfCollector({ maxBytes, mergeVerticalPages }) {
     const embeddedFirst = await targetPdf.embedPage(first.page);
     const embeddedSecond = await targetPdf.embedPage(second.page);
     const spread = targetPdf.addPage([pageWidth, pageHeight]);
-    // Manga is read right-to-left: the earlier page is placed on the right.
     spread.drawPage(embeddedSecond, {
       x: 0,
       y: (pageHeight - second.height) / 2,
@@ -124,45 +129,79 @@ function createPdfCollector({ maxBytes, mergeVerticalPages }) {
     await addPairSpread(targetPdf, operation.first, operation.second);
   }
 
-  async function operationFitsCurrentPdf(operation) {
-    if (!currentHasPages || !currentBytes) return true;
-    const trialPdf = await PDFDocument.load(currentBytes, { ignoreEncryption: true });
-    await addOperation(trialPdf, operation);
-    const trialBytes = await trialPdf.save({ useObjectStreams: true });
-    return trialBytes.length <= maxBytes;
+  async function documentFromCheckpoint() {
+    return currentBytes
+      ? PDFDocument.load(currentBytes, { ignoreEncryption: true })
+      : PDFDocument.create();
+  }
+
+  async function tryCommitBatch(operations) {
+    if (operations.length === 0) return true;
+    const candidatePdf = await documentFromCheckpoint();
+    for (const operation of operations) await addOperation(candidatePdf, operation);
+    const candidateBytes = Buffer.from(await candidatePdf.save({ useObjectStreams: true }));
+    if (metrics) metrics.serializations = (metrics.serializations || 0) + 1;
+
+    if (candidateBytes.length > maxBytes && (currentHasPages || operations.length > 1)) return false;
+    currentBytes = candidateBytes;
+    currentHasPages = true;
+    rememberSources(operations);
+    if (candidateBytes.length > maxBytes) await emitCurrentPdf();
+    return true;
+  }
+
+  async function commitWithPageFallback(operations) {
+    for (const operation of operations) {
+      if (await tryCommitBatch([operation])) continue;
+      await emitCurrentPdf();
+      if (!(await tryCommitBatch([operation]))) {
+        throw new Error("A PDF page could not be placed in an empty Kindle volume");
+      }
+    }
   }
 
   async function emitCurrentPdf() {
     if (!currentHasPages || !currentBytes) return;
-    volumes.push({ sources: currentSources, bytes: currentBytes, oversize: currentBytes.length > maxBytes });
-    await newPdf();
+    const emitted = await emitVolume({
+      sources: [...currentSources],
+      bytes: currentBytes,
+      oversize: currentBytes.length > maxBytes
+    }, volumes.length);
+    volumes.push(emitted);
+    currentBytes = null;
+    currentHasPages = false;
+    currentSources = [];
   }
 
-  async function commitOperation(operation) {
-    await ensurePdf();
-    await addOperation(currentPdf, operation);
-    const candidateBytes = Buffer.from(await currentPdf.save({ useObjectStreams: true }));
+  function sourceOperations(sourcePdf, pages, source, startIndex = 0, initialOperations = []) {
+    const operations = [...initialOperations];
+    let committedSourceOperations = initialOperations.some((operation) =>
+      operation.type === "pair" && operation.second.source === source
+    ) ? 1 : 0;
+    let trailingPending = null;
 
-    if (candidateBytes.length > maxBytes && currentHasPages && currentBytes) {
-      await emitCurrentPdf();
-      await addOperation(currentPdf, operation);
-      currentBytes = Buffer.from(await currentPdf.save({ useObjectStreams: true }));
-      currentHasPages = true;
-      rememberSources(operation);
-    } else {
-      currentBytes = candidateBytes;
-      currentHasPages = true;
-      rememberSources(operation);
+    for (let pageIndex = startIndex; pageIndex < pages.length; pageIndex += 1) {
+      const item = pageInfo(sourcePdf, pages[pageIndex], pageIndex, source);
+      const isLast = pageIndex === pages.length - 1;
+      if (mergeVerticalPages && isLast && item.isVertical) {
+        item.canBridgeWithoutCurrentPages = committedSourceOperations === 0;
+        trailingPending = item;
+        continue;
+      }
+      operations.push({ type: "single", item });
+      committedSourceOperations += 1;
     }
-
-    if (currentBytes.length > maxBytes) await emitCurrentPdf();
+    return { operations, trailingPending };
   }
 
-  async function flushPendingSinglePage() {
-    if (!pendingSinglePage) return;
-    const item = pendingSinglePage;
-    pendingSinglePage = null;
-    await commitOperation({ type: "single", item });
+  async function commitSourceOperations(operations) {
+    if (operations.length === 0) return;
+    if (await tryCommitBatch(operations)) return;
+    if (currentHasPages) {
+      await emitCurrentPdf();
+      if (await tryCommitBatch(operations)) return;
+    }
+    await commitWithPageFallback(operations);
   }
 
   async function add(source) {
@@ -170,43 +209,47 @@ function createPdfCollector({ maxBytes, mergeVerticalPages }) {
     const pages = sourcePdf.getPages();
     if (pages.length === 0) return;
 
+    const previousPending = pendingSinglePage;
+    pendingSinglePage = null;
+    let leadingOperations = [];
     let startIndex = 0;
-    let committedSourceOperations = 0;
-    if (pendingSinglePage) {
+    if (previousPending) {
       const first = pageInfo(sourcePdf, pages[0], 0, source);
-      const canBridge = currentHasPages || pendingSinglePage.canBridgeWithoutCurrentPages;
-      const pair = { type: "pair", first: pendingSinglePage, second: first };
+      const canBridge = currentHasPages || previousPending.canBridgeWithoutCurrentPages;
       if (
         mergeVerticalPages &&
-        pendingSinglePage.sourceKey !== first.sourceKey &&
+        previousPending.sourceKey !== first.sourceKey &&
         first.isVertical &&
-        canBridge &&
-        await operationFitsCurrentPdf(pair)
+        canBridge
       ) {
-        pendingSinglePage = null;
-        await commitOperation(pair);
+        leadingOperations = [{ type: "pair", first: previousPending, second: first }];
         startIndex = 1;
-        committedSourceOperations += 1;
       } else {
-        await flushPendingSinglePage();
+        leadingOperations = [{ type: "single", item: previousPending }];
       }
     }
 
-    for (let pageIndex = startIndex; pageIndex < pages.length; pageIndex += 1) {
-      const item = pageInfo(sourcePdf, pages[pageIndex], pageIndex, source);
-      const isLast = pageIndex === pages.length - 1;
-      if (mergeVerticalPages && isLast && item.isVertical) {
-        item.canBridgeWithoutCurrentPages = committedSourceOperations === 0;
-        pendingSinglePage = item;
-        continue;
-      }
-      await commitOperation({ type: "single", item });
-      committedSourceOperations += 1;
+    let prepared = sourceOperations(sourcePdf, pages, source, startIndex, leadingOperations);
+    if (await tryCommitBatch(prepared.operations)) {
+      pendingSinglePage = prepared.trailingPending;
+      return;
     }
+
+    // The whole next source did not fit. Preserve the previous source's final
+    // page in the old volume, then retry this source atomically in a new one.
+    if (previousPending) await commitWithPageFallback([{ type: "single", item: previousPending }]);
+    if (currentHasPages) await emitCurrentPdf();
+    prepared = sourceOperations(sourcePdf, pages, source, 0, []);
+    await commitSourceOperations(prepared.operations);
+    pendingSinglePage = prepared.trailingPending;
   }
 
   async function finish() {
-    await flushPendingSinglePage();
+    if (pendingSinglePage) {
+      const item = pendingSinglePage;
+      pendingSinglePage = null;
+      await commitSourceOperations([{ type: "single", item }]);
+    }
     await emitCurrentPdf();
     if (volumes.length === 0) throw new Error("No PDF pages were produced");
     return volumes;

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { buildKindleVolumes } from "./pdf.mjs";
+import { buildKindleVolumesInSubprocess } from "./pdf-subprocess.mjs";
 import { cleanTitle, helpText, normalizeTitle, parseCommand } from "./command.mjs";
 import { selectChapterRange } from "./chapters.mjs";
 import { choicesKeyboard } from "./telegram.mjs";
@@ -94,6 +94,7 @@ export class Orchestrator {
 
   async runJob(initialJob) {
     let job = initialJob;
+    const workDir = path.join(this.tempRoot, initialJob.id);
     try {
       job = this.store.updateJob(job.id, { status: "processing", error: null, progress: "Определяю произведение" });
       await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
@@ -113,10 +114,9 @@ export class Orchestrator {
       job = this.store.getJob(job.id);
       if (job.status === "cancelled") return;
 
-      const workDir = path.join(this.tempRoot, job.id);
       job = this.store.updateJob(job.id, { progress: `Собираю итоговые PDF из ${sourcePdfs.length} файлов` });
       await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
-      const volumes = await buildKindleVolumes({
+      const volumes = await buildKindleVolumesInSubprocess({
         sourcePdfs,
         destinationDir: path.join(workDir, "volumes"),
         baseName: job.seriesTitle,
@@ -151,6 +151,10 @@ export class Orchestrator {
       const message = errorMessage(error);
       this.store.updateJob(initialJob.id, { status: "failed", error: message, progress: "Ошибка" });
       await this.sendProgress(initialJob.chatId, `Задание ${shortId(initialJob.id)} остановлено: ${message}\n/retry — повторить.`);
+    } finally {
+      await fs.rm(workDir, { recursive: true, force: true }).catch((error) => {
+        console.error("Cannot clean manga job workspace", workDir, error);
+      });
     }
   }
 

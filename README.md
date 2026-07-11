@@ -28,13 +28,20 @@ Telegram
   → manga-bot-worker
   → manga-pdf-processor
   → WeebCentral
-  → PDF collector
+  → one-shot PDF assembly subprocess
   → kindle-uploader
   → Amazon Send to Kindle
 ```
 
 The web interface remains directly available through `manga-pdf-processor`
 and uses the same Kindle uploader.
+
+The bot writes chapter PDFs to its per-job temporary workspace. Final Kindle
+volumes are assembled in a one-shot child process, checkpointed once per source
+PDF, and written to disk as soon as each volume closes. This keeps completed
+volume bytes out of the long-lived bot heap. The child process exits after
+assembly so the operating system reclaims `pdf-lib` memory immediately, and
+the complete job workspace is removed after success, cancellation, or failure.
 
 ## Local verification
 
