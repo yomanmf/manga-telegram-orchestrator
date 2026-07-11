@@ -20,7 +20,7 @@ ENV DISPLAY=:99
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-COPY server.mjs submission.mjs chromium-profile.mjs upload-progress.mjs start.sh ./
+COPY server.mjs submission.mjs chromium-profile.mjs upload-progress.mjs kindle-filename.mjs start.sh ./
 RUN chmod +x /app/start.sh
 
 CMD ["/usr/bin/tini", "--", "/app/start.sh"]

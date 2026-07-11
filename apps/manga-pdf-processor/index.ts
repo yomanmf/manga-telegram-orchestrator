@@ -6,6 +6,9 @@ import {
   acceptedKindleUploadProgress,
   nextKindleUploadRange
 } from "./kindle-upload-contract.mjs";
+import {
+  normalizeKindlePdfFileName
+} from "./kindle-filename.mjs";
 
 const app = new Hono();
 
@@ -5369,7 +5372,7 @@ async function createKindleUploadTicket(
         },
         body: JSON.stringify({
           filename:
-            sanitizeFileName(
+            normalizeKindlePdfFileName(
               filename ||
               "document.pdf"
             ),

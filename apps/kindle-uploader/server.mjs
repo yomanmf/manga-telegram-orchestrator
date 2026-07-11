@@ -26,6 +26,9 @@ import {
   isChromiumProfileLockError
 } from "./chromium-profile.mjs";
 import { validateResumableChunk } from "./upload-progress.mjs";
+import {
+  normalizeKindlePdfFileName
+} from "./kindle-filename.mjs";
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || "/data";
@@ -237,13 +240,14 @@ app.post(
   requireApiSecret,
   express.json({ limit: "64kb" }),
   (req, res) => {
-    const filename = sanitizeFileName(req.body?.filename);
+    const requestedFilename = String(req.body?.filename || "").trim();
     const size = Number(req.body?.size);
 
-    if (!filename.toLowerCase().endsWith(".pdf")) {
+    if (!requestedFilename.toLowerCase().endsWith(".pdf")) {
       res.status(400).json({ error: "Only PDF files are supported" });
       return;
     }
+    const filename = normalizeKindlePdfFileName(requestedFilename);
     if (!Number.isFinite(size) || size <= 0 || size > MAX_FILE_SIZE) {
       res.status(400).json({
         error: "File must be between 1 byte and 200 MB"
