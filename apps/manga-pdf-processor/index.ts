@@ -2,6 +2,10 @@ import { Hono } from "hono";
 import { PDFDocument } from "pdf-lib";
 import JSZip from "jszip";
 import { classifyKindleSentJob } from "./kindle-job-contract.mjs";
+import {
+  acceptedKindleUploadProgress,
+  nextKindleUploadRange
+} from "./kindle-upload-contract.mjs";
 
 const app = new Hono();
 
@@ -1130,6 +1134,8 @@ const htmlContent = `<!DOCTYPE html>
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <script>
     ${classifyKindleSentJob.toString()}
+    ${acceptedKindleUploadProgress.toString()}
+    ${nextKindleUploadRange.toString()}
 
 
     const uploadArea =
@@ -3784,89 +3790,155 @@ const htmlContent = `<!DOCTYPE html>
       }
 
 
-      const maxUploadAttempts = 5;
+      const maxChunkAttempts = 5;
       let uploadResult = null;
       let lastUploadError = null;
+      let receivedBytes = 0;
 
+      while (!uploadResult) {
+        const range = nextKindleUploadRange(
+          blob.size,
+          receivedBytes
+        );
+        const finalizing =
+          range.start === blob.size;
+        let chunkAdvanced = false;
 
-      for (
-        let attempt = 1;
-        attempt <= maxUploadAttempts;
-        attempt += 1
-      ) {
-
-        progressText.textContent =
-          "Uploading PDF to Kindle worker (attempt " +
-          attempt +
-          "/" +
-          maxUploadAttempts +
-          "): " +
-          fileName;
-
-        try {
-          const uploadResponse = await fetch(
-            ticket.uploadUrl,
-            {
-              method: "PUT",
-              headers: {
-                "Content-Type":
-                  "application/pdf"
-              },
-              body: blob
-            }
-          );
-
-          let currentResult = {};
+        for (
+          let attempt = 1;
+          attempt <= maxChunkAttempts;
+          attempt += 1
+        ) {
+          progressText.textContent =
+            (finalizing
+              ? "Finalizing Kindle upload"
+              : "Uploading PDF to Kindle worker: " +
+                range.percent + "%") +
+            " (chunk attempt " +
+            attempt +
+            "/" +
+            maxChunkAttempts +
+            "): " +
+            fileName;
 
           try {
-            currentResult =
-              await uploadResponse.json();
-          } catch (_) {}
+            const separator =
+              ticket.uploadUrl.includes("?")
+                ? "&"
+                : "?";
+            const uploadResponse = await fetch(
+              ticket.uploadUrl +
+                separator +
+                "offset=" +
+                encodeURIComponent(range.start),
+              {
+                method: "PUT",
+                headers: {
+                  "Content-Type":
+                    "application/pdf"
+                },
+                body: blob.slice(
+                  range.start,
+                  range.end,
+                  "application/pdf"
+                )
+              }
+            );
 
-          if (uploadResponse.ok) {
-            uploadResult = currentResult;
+            let currentResult = {};
+            try {
+              currentResult =
+                await uploadResponse.json();
+            } catch (_) {}
+
+            if (uploadResponse.ok && currentResult.job) {
+              uploadResult = currentResult;
+              receivedBytes = blob.size;
+              chunkAdvanced = true;
+              break;
+            }
+
+            const reported =
+              acceptedKindleUploadProgress(
+                currentResult.receivedBytes,
+                blob.size
+              );
+            if (
+              !finalizing &&
+              reported !== null &&
+              reported > receivedBytes
+            ) {
+              receivedBytes = reported;
+              chunkAdvanced = true;
+              break;
+            }
+
+            lastUploadError = new Error(
+              currentResult.error ||
+              "Cannot queue PDF for Kindle"
+            );
+          } catch (error) {
+            lastUploadError = error;
+          }
+
+          const recovered =
+            await getKindleUploadProgress(
+              ticket.statusUrl
+            );
+          if (recovered?.job) {
+            uploadResult = recovered;
+            receivedBytes = blob.size;
+            chunkAdvanced = true;
             break;
           }
 
-          lastUploadError = new Error(
-            currentResult.error ||
-            "Cannot queue PDF for Kindle"
-          );
-        } catch (error) {
-          lastUploadError = error;
+          const existingJob =
+            await getKindleJobIfExists(
+              ticket.jobId
+            );
+          if (existingJob) {
+            uploadResult = { job: existingJob };
+            receivedBytes = blob.size;
+            chunkAdvanced = true;
+            break;
+          }
+
+          const recoveredBytes =
+            acceptedKindleUploadProgress(
+              recovered?.receivedBytes,
+              blob.size
+            );
+          if (
+            !finalizing &&
+            recoveredBytes !== null &&
+            recoveredBytes > receivedBytes
+          ) {
+            receivedBytes = recoveredBytes;
+            chunkAdvanced = true;
+            break;
+          }
+
+          if (attempt < maxChunkAttempts) {
+            progressText.textContent =
+              "Retrying interrupted Kindle upload at " +
+              Math.floor(
+                (receivedBytes / blob.size) * 100
+              ) +
+              "%: " +
+              fileName;
+
+            await new Promise(
+              function (resolve) {
+                setTimeout(
+                  resolve,
+                  Math.min(2000 * attempt, 8000)
+                );
+              }
+            );
+          }
         }
 
-
-        const existingJob =
-          await getKindleJobIfExists(
-            ticket.jobId
-          );
-
-        if (existingJob) {
-          uploadResult = {
-            job: existingJob
-          };
-          break;
-        }
-
-        if (attempt < maxUploadAttempts) {
-          progressText.textContent =
-            "Retrying interrupted Kindle upload: " +
-            fileName;
-
-          await new Promise(
-            function (resolve) {
-              setTimeout(
-                resolve,
-                Math.min(
-                  3000 * attempt,
-                  10000
-                )
-              );
-            }
-          );
-        }
-
+        if (!chunkAdvanced) break;
       }
 
 
@@ -3902,6 +3974,28 @@ const htmlContent = `<!DOCTYPE html>
         throw new Error(
           "Amazon confirmed the file, but Kindle status refresh failed"
         );
+      }
+
+    }
+
+
+    async function getKindleUploadProgress(
+      statusUrl
+    ) {
+
+      if (!statusUrl) {
+        return null;
+      }
+
+      try {
+        const response = await fetch(
+          statusUrl,
+          { cache: "no-store" }
+        );
+        const data = await response.json();
+        return response.ok ? data : null;
+      } catch (_) {
+        return null;
       }
 
     }

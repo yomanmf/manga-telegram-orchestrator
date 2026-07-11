@@ -34,7 +34,9 @@ Telegram
 ```
 
 The web interface remains directly available through `manga-pdf-processor`
-and uses the same Kindle uploader.
+and uses the same Kindle uploader. Browser uploads to the Kindle queue are sent
+in resumable 8 MiB chunks, so a network interruption resumes from the byte
+offset already stored by the uploader instead of restarting a 200 MB PDF.
 
 The bot writes chapter PDFs to its per-job temporary workspace. Final Kindle
 volumes are assembled in a one-shot child process, checkpointed once per source

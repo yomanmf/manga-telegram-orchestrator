@@ -25,6 +25,7 @@ import {
   CHROMIUM_SINGLETON_FILES,
   isChromiumProfileLockError
 } from "./chromium-profile.mjs";
+import { validateResumableChunk } from "./upload-progress.mjs";
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || "/data";
@@ -258,6 +259,8 @@ app.post(
       token,
       filename,
       size,
+      receivedBytes: 0,
+      partPath: path.join(TEMP_DIR, id + ".upload-part"),
       expiresAt
     });
     pruneTokens(uploadTickets);
@@ -267,6 +270,9 @@ app.post(
       uploadUrl:
         PUBLIC_BASE_URL + "/upload/" + id +
         "?token=" + encodeURIComponent(token),
+      statusUrl:
+        PUBLIC_BASE_URL + "/upload/" + id +
+        "/status?token=" + encodeURIComponent(token),
       expiresAt: new Date(expiresAt).toISOString()
     });
   }
@@ -277,21 +283,53 @@ app.options("/upload/:id", (req, res) => {
   res.status(204).end();
 });
 
-app.put("/upload/:id", async (req, res) => {
+app.get("/upload/:id/status", async (req, res) => {
   setUploadCors(req, res);
 
-  const id = String(req.params.id || "");
-  const token = String(req.query.token || "");
-  const ticket = uploadTickets.get(id);
-
-  if (
-    !ticket ||
-    ticket.token !== token ||
-    ticket.expiresAt < Date.now()
-  ) {
+  const ticket = validUploadTicket(req);
+  if (!ticket) {
     res.status(403).json({ error: "Upload ticket expired" });
     return;
   }
+
+  if (ticket.completedJob) {
+    res.json({
+      receivedBytes: ticket.size,
+      size: ticket.size,
+      complete: true,
+      job: publicJob(ticket.completedJob)
+    });
+    return;
+  }
+
+  await syncTicketReceivedBytes(ticket);
+  res.json({
+    receivedBytes: ticket.receivedBytes,
+    size: ticket.size,
+    complete: false
+  });
+});
+
+app.put("/upload/:id", async (req, res) => {
+  setUploadCors(req, res);
+
+  const ticket = validUploadTicket(req);
+  if (!ticket) {
+    res.status(403).json({ error: "Upload ticket expired" });
+    return;
+  }
+
+  if (ticket.completedJob) {
+    res.status(200).json({ job: publicJob(ticket.completedJob) });
+    return;
+  }
+
+  if (req.query.offset !== undefined) {
+    await handleResumableUpload(req, res, ticket);
+    return;
+  }
+
+  const id = ticket.id;
 
   if (ticket.inProgress) {
     res.status(409).json({ error: "Upload already in progress" });
@@ -358,6 +396,148 @@ app.put("/upload/:id", async (req, res) => {
     res.status(500).json({ error: errorMessage(error) });
   }
 });
+
+function validUploadTicket(req) {
+  const id = String(req.params.id || "");
+  const token = String(req.query.token || "");
+  const ticket = uploadTickets.get(id);
+  return ticket &&
+    ticket.token === token &&
+    ticket.expiresAt >= Date.now()
+    ? ticket
+    : null;
+}
+
+async function syncTicketReceivedBytes(ticket) {
+  try {
+    const stat = await fsp.stat(ticket.partPath);
+    ticket.receivedBytes = Math.min(stat.size, ticket.size);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    ticket.receivedBytes = 0;
+  }
+}
+
+async function handleResumableUpload(req, res, ticket) {
+  await syncTicketReceivedBytes(ticket);
+
+  const offset = Number(req.query.offset);
+  const contentLength = Number(req.headers["content-length"]);
+  const range = validateResumableChunk({
+    offset,
+    receivedBytes: ticket.receivedBytes,
+    totalSize: ticket.size,
+    contentLength
+  });
+
+  if (!range.ok) {
+    res.status(range.status).json({
+      error: range.error,
+      receivedBytes: ticket.receivedBytes,
+      size: ticket.size
+    });
+    return;
+  }
+
+  if (ticket.inProgress) {
+    res.status(409).json({
+      error: "Upload already in progress",
+      receivedBytes: ticket.receivedBytes,
+      size: ticket.size
+    });
+    return;
+  }
+
+  ticket.inProgress = true;
+  try {
+    if (!range.finalizeOnly) {
+      await pipeline(
+        req,
+        fs.createWriteStream(ticket.partPath, {
+          flags: ticket.receivedBytes === 0 ? "w" : "a"
+        })
+      );
+      await syncTicketReceivedBytes(ticket);
+
+      if (ticket.receivedBytes !== offset + contentLength) {
+        throw new Error(
+          "Upload chunk size mismatch: expected " +
+            (offset + contentLength) +
+          ", received " + ticket.receivedBytes
+        );
+      }
+      ticket.expiresAt = Date.now() + 30 * 60 * 1000;
+    }
+
+    if (ticket.receivedBytes < ticket.size) {
+      res.status(202).json({
+        receivedBytes: ticket.receivedBytes,
+        size: ticket.size,
+        complete: false
+      });
+      return;
+    }
+
+    const job = await finalizeResumableUpload(ticket);
+    res.status(201).json({
+      receivedBytes: ticket.size,
+      size: ticket.size,
+      complete: true,
+      job: publicJob(job)
+    });
+  } catch (error) {
+    await syncTicketReceivedBytes(ticket).catch(() => {});
+    console.error("Resumable upload failed", ticket.id, error);
+    if (!res.headersSent && !res.destroyed) {
+      res.status(500).json({
+        error: errorMessage(error),
+        receivedBytes: ticket.receivedBytes,
+        size: ticket.size
+      });
+    }
+  } finally {
+    ticket.inProgress = false;
+  }
+}
+
+async function finalizeResumableUpload(ticket) {
+  if (ticket.completedJob) return ticket.completedJob;
+
+  const objectKey =
+    "kindle-queue/" + ticket.id + "/" + ticket.filename;
+  const upload = new Upload({
+    client: s3,
+    params: {
+      Bucket: bucketName,
+      Key: objectKey,
+      Body: fs.createReadStream(ticket.partPath),
+      ContentType: "application/pdf"
+    },
+    queueSize: 2,
+    partSize: 10 * 1024 * 1024,
+    leavePartsOnError: false
+  });
+
+  await upload.done();
+
+  const job = {
+    id: ticket.id,
+    key: objectKey,
+    filename: ticket.filename,
+    size: ticket.size,
+    status: "queued",
+    attempts: 0,
+    error: "",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  queue.push(job);
+  await saveQueue();
+  ticket.completedJob = job;
+  await fsp.rm(ticket.partPath, { force: true });
+  kickQueue();
+  return job;
+}
 
 app.use((error, _req, res, _next) => {
   console.error("Unhandled request error", error);
@@ -1529,7 +1709,7 @@ function setUploadCors(req, res) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
   res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "PUT, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, PUT, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.setHeader("Access-Control-Max-Age", "600");
 }
@@ -1607,6 +1787,9 @@ function pruneTokens(map) {
   for (const [key, value] of map.entries()) {
     if (value.expiresAt < Date.now()) {
       map.delete(key);
+      if (value.partPath) {
+        void fsp.rm(value.partPath, { force: true }).catch(() => {});
+      }
     }
   }
 }
