@@ -6,11 +6,12 @@
   "scripts": {
     "start": "bun run index.ts",
     "check": "node --input-type=module --check < index.ts && node --check pdf-merge-contract.mjs && node --check pdf-utils.mjs",
-    "test": "node --test pdf-merge-contract.test.mjs pdf-utils.test.mjs"
+    "test": "node --test *.test.mjs"
   },
   "dependencies": {
     "hono": "4.12.29",
     "jszip": "3.10.1",
-    "pdf-lib": "1.17.1"
+    "pdf-lib": "1.17.1",
+    "sharp": "0.35.3"
   }
 }
