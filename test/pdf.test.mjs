@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { PDFDocument } from "pdf-lib";
-import { buildKindleVolumes } from "../src/pdf.mjs";
+import { buildKindleVolumes, mergePdfBuffers } from "../src/pdf.mjs";
 
 test("merges source PDFs and splits on a configured size", async () => {
   const directory = `/tmp/manga-pdf-test-${Date.now()}-${Math.random()}`;
@@ -57,4 +57,27 @@ test("places an unpaired vertical page on the right side of a landscape spread",
   });
   const portraitPdf = await PDFDocument.load(await fs.readFile(portrait.filePath));
   assert.deepEqual(portraitPdf.getPage(0).getSize(), { width: 300, height: 600 });
+});
+
+test("matches web cross-source pairing rules for vertical pages", async () => {
+  const oneSource = await PDFDocument.create();
+  for (let index = 0; index < 2; index += 1) {
+    const page = oneSource.addPage([300, 600]);
+    page.drawRectangle({ x: index, y: 0, width: 1, height: 1 });
+  }
+  const sameSourceResult = await PDFDocument.load(await mergePdfBuffers([
+    await oneSource.save()
+  ], { mergeVerticalPages: true }));
+  assert.equal(sameSourceResult.getPageCount(), 2);
+  assert.deepEqual(sameSourceResult.getPage(0).getSize(), { width: 600, height: 600 });
+
+  const firstSource = await PDFDocument.create();
+  firstSource.addPage([300, 600]).drawRectangle({ x: 0, y: 0, width: 1, height: 1 });
+  const secondSource = await PDFDocument.create();
+  secondSource.addPage([300, 600]).drawRectangle({ x: 0, y: 0, width: 1, height: 1 });
+  const crossSourceResult = await PDFDocument.load(await mergePdfBuffers([
+    await firstSource.save(), await secondSource.save()
+  ], { mergeVerticalPages: true }));
+  assert.equal(crossSourceResult.getPageCount(), 1);
+  assert.deepEqual(crossSourceResult.getPage(0).getSize(), { width: 600, height: 600 });
 });

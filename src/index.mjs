@@ -102,7 +102,7 @@ function readConfig(env) {
     kindleSharedSecret: optional(env, "KINDLE_SHARED_SECRET"),
     publicBaseUrl: String(env.PUBLIC_BASE_URL || "").replace(/\/$/, ""),
     adminToken: env.ADMIN_API_TOKEN || "",
-    maxPdfBytes: Number(env.MAX_PDF_BYTES || 199000000)
+    maxPdfBytes: Number(env.MAX_PDF_BYTES || 193986560)
   };
   if (!Number.isFinite(config.maxPdfBytes) || config.maxPdfBytes < 10_000_000 || config.maxPdfBytes > 199_000_000) {
     throw new Error("MAX_PDF_BYTES must be between 10 MB and 199 MB");
