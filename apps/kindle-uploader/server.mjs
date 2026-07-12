@@ -21,7 +21,8 @@ import {
   evaluateBatchPageText,
   evaluateSubmissionEvidence,
   firstNewEvidence,
-  normalizeLoadedJob
+  normalizeLoadedJob,
+  shouldFinalizeBatchAcknowledgement
 } from "./submission.mjs";
 import {
   CHROMIUM_SINGLETON_FILES,
@@ -55,6 +56,10 @@ const BROWSER_IDLE_MS = Number(
 const IDLE_RECYCLE_MS = Math.max(
   30_000,
   Number(process.env.IDLE_RECYCLE_MS || 120_000)
+);
+const BATCH_ACK_SETTLE_MS = Math.max(
+  15_000,
+  Number(process.env.BATCH_ACK_SETTLE_MS || 60_000)
 );
 const SHARED_SECRET = requiredEnv("KINDLE_SHARED_SECRET");
 const PUBLIC_BASE_URL = requiredEnv("PUBLIC_BASE_URL")
@@ -1379,9 +1384,10 @@ async function finalizeVerifiedJob(job, evidence) {
   job.updatedAt = job.sentAt;
   await saveQueue();
   console.log(
-    "Kindle job verified in Amazon library",
+    "Kindle job delivery accepted by Amazon",
     job.id,
-    job.filename
+    job.filename,
+    job.amazonStatus
   );
 }
 
@@ -1506,7 +1512,7 @@ async function uploadFilesToKindle(filePaths, jobs) {
   }
   await saveQueue();
   console.log(
-    "Kindle batch submitted to Amazon; waiting for library confirmation",
+    "Kindle batch submitted to Amazon; waiting for delivery acknowledgement",
     jobs.map((job) => job.filename).join(", ")
   );
 
@@ -1859,6 +1865,22 @@ async function waitForAmazonBatchConfirmation(page, jobs) {
       acknowledgedAt ||= Date.now();
     } else {
       acknowledgedAt = 0;
+    }
+
+    if (shouldFinalizeBatchAcknowledgement({
+      acknowledgedAt,
+      now: Date.now(),
+      settleMs: BATCH_ACK_SETTLE_MS
+    })) {
+      for (const job of jobs) {
+        if (!confirmed.has(job.id)) {
+          confirmed.set(job.id, {
+            status: "submitted",
+            row: "Amazon kept the complete Ready to Send batch cleared"
+          });
+        }
+      }
+      return confirmed;
     }
 
     await page.waitForTimeout(1_500);

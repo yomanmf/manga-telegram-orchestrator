@@ -72,9 +72,10 @@ Each Telegram request gets its own Kindle batch. The worker first stages all of
 the request's PDF volumes in the Kindle uploader, then starts one Amazon
 submission containing the whole batch. This prevents a later upload from
 replacing an earlier pending submission in the Send to Kindle page. The uploader
-waits for Amazon's `In library` confirmation once for the batch before releasing
-the browser for another batch. Device synchronization remains asynchronous after
-that confirmation.
+accepts Amazon's `In library` confirmation when it is available. If Amazon does
+not expose that status, the uploader finalizes the request after the complete
+`Ready to Send` batch has stayed cleared for a protective interval. Device
+synchronization remains asynchronous after Amazon accepts the batch.
 
 Secrets are never committed. The Yandex Cloud runtime stores the Telegram
 token, webhook secret, web application password and session token, Kindle

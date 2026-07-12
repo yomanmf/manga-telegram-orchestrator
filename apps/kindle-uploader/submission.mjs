@@ -59,6 +59,20 @@ export function evaluateBatchPageText(bodyText, filenames = []) {
   };
 }
 
+export function shouldFinalizeBatchAcknowledgement({
+  acknowledgedAt,
+  now,
+  settleMs
+}) {
+  return Boolean(
+    acknowledgedAt &&
+    Number.isFinite(now) &&
+    Number.isFinite(settleMs) &&
+    settleMs >= 0 &&
+    now - acknowledgedAt >= settleMs
+  );
+}
+
 export function normalizeLoadedJob(job) {
   if (
     job.status === "queued" &&

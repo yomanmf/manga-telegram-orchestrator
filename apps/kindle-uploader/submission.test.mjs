@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import {
   evaluateBatchPageText,
   evaluateSubmissionEvidence,
-  normalizeLoadedJob
+  normalizeLoadedJob,
+  shouldFinalizeBatchAcknowledgement
 } from "./submission.mjs";
 import { isChromiumProfileLockError } from "./chromium-profile.mjs";
 
@@ -71,6 +72,27 @@ test("recognizes a complete multi-file batch in the Amazon library", () => {
     presentFilenames: filenames,
     missingFilenames: []
   });
+});
+
+test("finalizes a submitted batch after a stable Amazon acknowledgement", () => {
+  assert.equal(shouldFinalizeBatchAcknowledgement({
+    acknowledgedAt: 1_000,
+    now: 61_000,
+    settleMs: 60_000
+  }), true);
+});
+
+test("does not finalize a transient missing Ready to Send state", () => {
+  assert.equal(shouldFinalizeBatchAcknowledgement({
+    acknowledgedAt: 1_000,
+    now: 60_999,
+    settleMs: 60_000
+  }), false);
+  assert.equal(shouldFinalizeBatchAcknowledgement({
+    acknowledgedAt: 0,
+    now: 120_000,
+    settleMs: 60_000
+  }), false);
 });
 
 test("resumes verification for a submitted job without uploading it again", () => {
