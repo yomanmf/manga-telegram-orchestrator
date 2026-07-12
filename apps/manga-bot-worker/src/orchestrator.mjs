@@ -128,15 +128,29 @@ export class Orchestrator {
       }
 
       const queued = [...job.kindleJobs];
+      const batchId = job.id;
       for (const volume of volumes) {
         if (queued.some((item) => item.filename === volume.fileName)) continue;
         job = this.store.getJob(job.id);
         if (job.status === "cancelled") return;
         job = this.store.updateJob(job.id, { progress: `Передаю в Kindle: ${volume.fileName}` });
         await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
-        const kindleJob = await this.kindle.enqueueFile(volume.filePath, volume.fileName);
-        queued.push({ id: kindleJob.id, filename: volume.fileName, size: kindleJob.size, status: kindleJob.status });
+        const kindleJob = await this.kindle.enqueueFile(
+          volume.filePath,
+          volume.fileName,
+          { batchId, deferStart: true }
+        );
+        queued.push({
+          id: kindleJob.id,
+          filename: volume.fileName,
+          size: kindleJob.size,
+          status: kindleJob.status,
+          batchId
+        });
         this.store.updateJob(job.id, { kindleJobs: queued });
+      }
+      if (queued.some((item) => item.batchId === batchId)) {
+        await this.kindle.startBatch(batchId);
       }
       job = this.store.updateJob(job.id, {
         status: "delivering",

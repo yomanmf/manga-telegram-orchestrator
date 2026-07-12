@@ -21,12 +21,17 @@ export function createKindleClient({ baseUrl, sharedSecret }) {
     status() { return api("/api/status"); },
     job(id) { return api(`/api/jobs/${encodeURIComponent(id)}`); },
     connectToken() { return api("/api/connect-token", { method: "POST" }); },
-    async enqueueFile(filePath, filename) {
+    async enqueueFile(filePath, filename, options = {}) {
       const { size } = await fs.promises.stat(filePath);
       const ticket = await api("/api/tickets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename, size })
+        body: JSON.stringify({
+          filename,
+          size,
+          batchId: options.batchId || undefined,
+          deferQueue: Boolean(options.deferStart)
+        })
       });
       const upload = await fetch(ticket.uploadUrl, {
         method: "PUT",
@@ -37,7 +42,11 @@ export function createKindleClient({ baseUrl, sharedSecret }) {
       const data = await upload.json().catch(() => ({}));
       if (!upload.ok) throw new Error(data.error || `Kindle PDF upload failed (${upload.status})`);
       return data.job;
+    },
+    startBatch(batchId) {
+      return api(`/api/batches/${encodeURIComponent(batchId)}/start`, {
+        method: "POST"
+      });
     }
   };
 }
-

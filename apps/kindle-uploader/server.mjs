@@ -250,6 +250,15 @@ app.post(
   (req, res) => {
     const requestedFilename = String(req.body?.filename || "").trim();
     const size = Number(req.body?.size);
+    const batchId = normalizeBatchId(req.body?.batchId);
+    const deferQueue = Boolean(req.body?.deferQueue);
+
+    if (deferQueue && !batchId) {
+      res.status(400).json({
+        error: "deferQueue requires a valid batchId"
+      });
+      return;
+    }
 
     if (!requestedFilename.toLowerCase().endsWith(".pdf")) {
       res.status(400).json({ error: "Only PDF files are supported" });
@@ -271,6 +280,8 @@ app.post(
       token,
       filename,
       size,
+      batchId,
+      deferQueue,
       receivedBytes: 0,
       partPath: path.join(TEMP_DIR, id + ".upload-part"),
       expiresAt
@@ -286,6 +297,42 @@ app.post(
         PUBLIC_BASE_URL + "/upload/" + id +
         "/status?token=" + encodeURIComponent(token),
       expiresAt: new Date(expiresAt).toISOString()
+    });
+  }
+);
+
+app.post(
+  "/api/batches/:batchId/start",
+  requireApiSecret,
+  async (req, res) => {
+    const batchId = normalizeBatchId(req.params.batchId);
+    if (!batchId) {
+      res.status(400).json({ error: "Invalid batchId" });
+      return;
+    }
+
+    const jobs = queue.filter((job) => job.batchId === batchId);
+    if (jobs.length === 0) {
+      res.status(404).json({ error: "Batch not found" });
+      return;
+    }
+
+    const startedAt = new Date().toISOString();
+    let changed = false;
+    for (const job of jobs) {
+      if (!job.batchStartedAt) {
+        job.batchStartedAt = startedAt;
+        changed = true;
+      }
+    }
+    if (changed) {
+      await saveQueue();
+    }
+    kickQueue();
+
+    res.json({
+      batchId,
+      jobs: jobs.map(publicJob)
     });
   }
 );
@@ -390,6 +437,12 @@ app.put("/upload/:id", async (req, res) => {
       key: objectKey,
       filename: ticket.filename,
       size: ticket.size,
+      batchId: ticket.batchId || null,
+      batchStartedAt: ticket.deferQueue
+        ? null
+        : ticket.batchId
+          ? new Date().toISOString()
+          : null,
       status: "queued",
       attempts: 0,
       error: "",
@@ -537,6 +590,12 @@ async function finalizeResumableUpload(ticket) {
     key: objectKey,
     filename: ticket.filename,
     size: ticket.size,
+    batchId: ticket.batchId || null,
+    batchStartedAt: ticket.deferQueue
+      ? null
+      : ticket.batchId
+        ? new Date().toISOString()
+        : null,
     status: "queued",
     attempts: 0,
     error: "",
@@ -1111,11 +1170,23 @@ async function runQueue() {
       }
 
       try {
-        await processQueueJob(job);
+        if (job.batchId) {
+          await processQueueBatch(job.batchId);
+        } else {
+          await processQueueJob(job);
+        }
       } catch (error) {
-        await recordQueueJobFailure(job, error);
+        const affectedJobs = job.batchId
+          ? queue.filter((item) =>
+            item.batchId === job.batchId &&
+            ["queued", "processing", "verifying"].includes(item.status)
+          )
+          : [job];
+        for (const affectedJob of affectedJobs) {
+          await recordQueueJobFailure(affectedJob, error);
+        }
 
-        if (!kindleConnected || job.status === "failed") {
+        if (!kindleConnected || affectedJobs.some((item) => item.status === "failed")) {
           return;
         }
       }
@@ -1127,7 +1198,10 @@ async function runQueue() {
 }
 
 function nextQueueJob() {
-  return queue.find((item) => item.status === "queued") ||
+  return queue.find((item) =>
+    item.status === "queued" &&
+    (!item.batchId || item.batchStartedAt)
+  ) ||
     (kindleConnected
       ? queue.find((item) => item.status === "waiting_auth")
       : null) ||
@@ -1212,6 +1286,91 @@ async function processQueueJob(job) {
     job,
     job.verificationEvidence
   );
+}
+
+async function processQueueBatch(batchId) {
+  const jobs = queue
+    .filter((item) =>
+      item.batchId === batchId &&
+      item.batchStartedAt &&
+      ["queued", "processing", "verifying"].includes(item.status)
+    )
+    .sort((left, right) =>
+      String(left.createdAt).localeCompare(String(right.createdAt))
+    );
+
+  if (jobs.length === 0) return;
+
+  const submittedJobs = jobs.filter((job) => job.submittedAt);
+  if (submittedJobs.length > 0) {
+    if (submittedJobs.length !== jobs.length) {
+      throw new Error("Kindle batch has an incomplete submission state");
+    }
+    await verifySubmittedBatch(jobs);
+    return;
+  }
+
+  for (const job of jobs) {
+    job.status = "processing";
+    job.attempts += 1;
+    job.error = "";
+    job.amazonStatus = "";
+    job.verificationEvidence = null;
+    job.updatedAt = new Date().toISOString();
+  }
+  await saveQueue();
+
+  const batchTempDir = path.join(TEMP_DIR, "batch-" + sanitizeFileName(batchId));
+  await fsp.mkdir(batchTempDir, { recursive: true });
+  const files = [];
+
+  try {
+    for (const job of jobs) {
+      const tempPath = path.join(
+        batchTempDir,
+        sanitizeFileName(job.id + "-" + job.filename)
+      );
+      await downloadObject(job.key, tempPath);
+      files.push({ job, tempPath });
+    }
+
+    const evidence = await uploadFilesToKindle(
+      files.map((item) => item.tempPath),
+      jobs
+    );
+    for (const job of jobs) {
+      await finalizeVerifiedJob(job, evidence.get(job.id));
+    }
+  } finally {
+    await fsp.rm(batchTempDir, {
+      recursive: true,
+      force: true
+    });
+  }
+}
+
+async function verifySubmittedBatch(jobs) {
+  const page = await ensureBrowser();
+  await page.goto(SEND_TO_KINDLE_URL, {
+    waitUntil: "domcontentloaded"
+  });
+
+  const evidence = new Map();
+  for (const job of jobs) {
+    const result = await waitForAmazonLibraryConfirmation(
+      page,
+      job.filename,
+      job.verificationBaseline || {
+        readyRows: [],
+        inLibraryRows: [],
+        failureRows: []
+      }
+    );
+    evidence.set(job.id, result);
+  }
+  for (const job of jobs) {
+    await finalizeVerifiedJob(job, evidence.get(job.id));
+  }
 }
 
 async function finalizeVerifiedJob(job, evidence) {
@@ -1318,6 +1477,92 @@ async function uploadFileToKindle(filePath, job) {
   }
 }
 
+async function uploadFilesToKindle(filePaths, jobs) {
+  const page = await ensureBrowser();
+  await page.goto(SEND_TO_KINDLE_URL, {
+    waitUntil: "domcontentloaded"
+  });
+
+  await clearExistingKindleFiles(page);
+  await selectKindleFiles(page, filePaths);
+  const baselines = await waitForKindleFilesReady(page, jobs);
+  await requireAddToLibrary(page);
+
+  for (const job of jobs) {
+    job.verificationBaseline = baselines.get(job.id);
+  }
+  await saveQueue();
+
+  await clickKindleSendButton(page);
+
+  const submittedAt = new Date().toISOString();
+  for (const job of jobs) {
+    job.status = "verifying";
+    job.submittedAt = submittedAt;
+    job.updatedAt = submittedAt;
+  }
+  await saveQueue();
+  console.log(
+    "Kindle batch submitted to Amazon; waiting for library confirmation",
+    jobs.map((job) => job.filename).join(", ")
+  );
+
+  try {
+    const evidence = new Map();
+    for (const job of jobs) {
+      evidence.set(job.id, await waitForAmazonLibraryConfirmation(
+        page,
+        job.filename,
+        job.verificationBaseline
+      ));
+    }
+    return evidence;
+  } catch (error) {
+    await saveKindleDiagnostic(page, jobs[0], error);
+    throw error;
+  }
+}
+
+async function selectKindleFiles(page, filePaths) {
+  const fileInput = page.locator('input[type="file"]');
+  if (await fileInput.count() > 0) {
+    const multiple = await fileInput.first().getAttribute("multiple");
+    if (multiple !== null) {
+      await fileInput.first().setInputFiles(filePaths);
+      return;
+    }
+    await fileInput.first().setInputFiles(filePaths[0]);
+    filePaths = filePaths.slice(1);
+    await page.waitForTimeout(500);
+  }
+
+  for (const filePath of filePaths) {
+    const selectFileButton = page.getByText(
+      /select files from device|drop or add more files|add more files/i
+    );
+    let visibleButton = null;
+    const buttonCount = await selectFileButton.count();
+    for (let index = 0; index < buttonCount; index += 1) {
+      const candidate = selectFileButton.nth(index);
+      if (await candidate.isVisible().catch(() => false)) {
+        visibleButton = candidate;
+        break;
+      }
+    }
+    if (!visibleButton) {
+      throw authRequired();
+    }
+
+    const fileChooserPromise = page.waitForEvent("filechooser", {
+      timeout: 30_000
+    });
+    await visibleButton.click();
+    const fileChooser = await fileChooserPromise;
+    await fileChooser.setFiles(filePath);
+    await page.waitForTimeout(500);
+  }
+}
+
 async function waitForKindleFileReady(page, filename) {
   const deadline = Date.now() + 120_000;
 
@@ -1339,6 +1584,38 @@ async function waitForKindleFileReady(page, filename) {
 
   throw new Error(
     "Amazon did not finish preparing the selected PDF"
+  );
+}
+
+async function waitForKindleFilesReady(page, jobs) {
+  const deadline = Date.now() + 120_000;
+
+  while (Date.now() < deadline) {
+    if (/signin|ap\/signin/i.test(page.url())) {
+      throw authRequired();
+    }
+
+    const evidence = new Map();
+    let failure = "";
+    let allReady = true;
+    for (const job of jobs) {
+      const current = await collectKindleEvidence(page, job.filename);
+      evidence.set(job.id, current);
+      if (!failure && current.failureRows.length > 0) {
+        failure = current.failureRows[0];
+      }
+      if (current.readyRows.length === 0) {
+        allReady = false;
+      }
+    }
+    if (failure) throw new Error(failure);
+    if (allReady) return evidence;
+
+    await page.waitForTimeout(1_000);
+  }
+
+  throw new Error(
+    "Amazon did not finish preparing the selected PDF batch"
   );
 }
 
@@ -1371,6 +1648,19 @@ async function requireAddToLibrary(page) {
     throw new Error(
       "Amazon Add to your library checkbox is not enabled"
     );
+  }
+
+  for (let index = 0; index < count; index += 1) {
+    const candidate = checkboxes.nth(index);
+    if (!(await candidate.isVisible().catch(() => false))) continue;
+    if (!(await candidate.isChecked())) {
+      await candidate.check();
+    }
+    if (!(await candidate.isChecked())) {
+      throw new Error(
+        "Amazon Add to your library checkbox is not enabled"
+      );
+    }
   }
 }
 
@@ -1761,6 +2051,13 @@ function isSmokeTestJob(job) {
     .test(String(job?.filename || ""));
 }
 
+function normalizeBatchId(value) {
+  const batchId = String(value || "").trim();
+  return /^[A-Za-z0-9_-]{1,100}$/.test(batchId)
+    ? batchId
+    : null;
+}
+
 function publicJob(job) {
   return {
     id: job.id,
@@ -1774,6 +2071,7 @@ function publicJob(job) {
     submittedAt: job.submittedAt || null,
     verifiedAt: job.verifiedAt || null,
     sentAt: job.sentAt || null,
+    batchId: job.batchId || null,
     amazonStatus: job.amazonStatus || "",
     verificationEvidence:
       job.verificationEvidence || null,

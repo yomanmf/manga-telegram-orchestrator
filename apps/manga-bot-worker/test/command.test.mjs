@@ -94,6 +94,8 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
   const pagePdf = Buffer.from(await pdf.save());
   const messages = [];
   const processedChapters = [];
+  const enqueueOptions = [];
+  let startedBatch = "";
   let failedProgressNotification = false;
   const store = createStore(directory);
   const telegram = {
@@ -126,7 +128,11 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
     }
   };
   const kindle = {
-    async enqueueFile() { return { id: "kindle-job-1", status: "queued" }; },
+    async enqueueFile(_filePath, _filename, options) {
+      enqueueOptions.push(options);
+      return { id: "kindle-job-1", status: "queued" };
+    },
+    async startBatch(batchId) { startedBatch = batchId; },
     async job() { return { job: { status: "sent" } }; },
     async connectToken() { return { url: "https://example.test/connect" }; }
   };
@@ -145,6 +151,8 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
   assert.equal(job.chapterManifest.length, 4);
   assert.deepEqual(processedChapters, ["Chapter 22", "Chapter 23", "Chapter 24", "Chapter 25"]);
   assert.equal(job.kindleJobs.length, 1);
+  assert.equal(startedBatch, job.id);
+  assert.deepEqual(enqueueOptions, [{ batchId: job.id, deferStart: true }]);
   assert.equal(failedProgressNotification, true);
   const chapterProgress = messages.filter(({ text }) => / обработано \d+\/\d+ глав\./.test(text));
   assert.deepEqual(chapterProgress.map(({ text }) => text.match(/(\d+\/\d+)/)[1]), ["4/4"]);

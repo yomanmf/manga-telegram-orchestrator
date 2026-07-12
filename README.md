@@ -68,10 +68,13 @@ Storage bucket, and two persistent disks:
 - the `kindle-pdf-queue` Object Storage bucket temporarily stores PDFs between
   services through its S3-compatible API.
 
-The Kindle queue advances only after Amazon confirms the submitted PDF as `In
-library`. This prevents the next upload from replacing the previous pending
-submission in the Send to Kindle page. Device synchronization remains
-asynchronous after that confirmation.
+Each Telegram request gets its own Kindle batch. The worker first stages all of
+the request's PDF volumes in the Kindle uploader, then starts one Amazon
+submission containing the whole batch. This prevents a later upload from
+replacing an earlier pending submission in the Send to Kindle page. The uploader
+waits for Amazon's `In library` confirmation once for the batch before releasing
+the browser for another batch. Device synchronization remains asynchronous after
+that confirmation.
 
 Secrets are never committed. The Yandex Cloud runtime stores the Telegram
 token, webhook secret, web application password and session token, Kindle
