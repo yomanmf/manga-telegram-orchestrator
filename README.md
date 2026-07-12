@@ -11,11 +11,11 @@ apps/
 ├── manga-bot-worker/       Telegram webhook, job queue, PDF collector
 ├── manga-pdf-processor/    web UI, WeebCentral, page processing
 └── kindle-uploader/        S3 queue, Playwright, Chromium, and noVNC
-.railway/                   Railway project configuration
+.railway/                   Legacy Railway configuration (pre-migration)
 .github/workflows/ci.yml    checks for all services
 ```
 
-| Railway service | Root directory | Runtime |
+| Yandex Cloud service | Root directory | Runtime |
 | --- | --- | --- |
 | `manga-bot-worker` | `/apps/manga-bot-worker` | Node.js 20, Express, SQLite |
 | `manga-pdf-processor` | `/apps/manga-pdf-processor` | Bun, Hono, pdf-lib, Sharp |
@@ -58,15 +58,16 @@ npm run verify
 The root command checks the syntax of all three services, the Telegram → PDF
 → Kindle orchestration tests, and the web processor contract tests.
 
-## Railway
+## Yandex Cloud
 
-The project uses three services, an S3-compatible bucket, and two persistent
-volumes:
+Production runs in Yandex Cloud and uses three services, a Yandex Object
+Storage bucket, and two persistent disks:
 
 - the `manga-bot-worker` volume stores SQLite data at `/data`;
 - the `kindle-uploader` volume stores the Amazon browser profile and queue at
   `/data`;
-- the `kindle-pdf-queue` bucket temporarily stores PDFs between services.
+- the `kindle-pdf-queue` Object Storage bucket temporarily stores PDFs between
+  services through its S3-compatible API.
 
 The Kindle queue advances after the Send action clears Amazon's `Ready to send`
 state without an immediate error. The later `In library` label is not a blocking
@@ -74,22 +75,15 @@ delivery condition because device delivery can finish before that web status
 appears. A submitted file is not uploaded again merely because `In library` is
 delayed, including after a service restart.
 
-Secrets are never committed. Railway stores the Telegram token, webhook
-secret, web application password and session token, Kindle shared secret, and
-S3 credentials.
+Secrets are never committed. The Yandex Cloud runtime stores the Telegram
+token, webhook secret, web application password and session token, Kindle
+shared secret, and Object Storage credentials.
 
 Each application's variables are documented in its `.env.example` file.
 
-The current infrastructure state is declared in `.railway/railway.ts`.
-Preview changes before applying them:
-
-```bash
-npx railway config plan
-```
-
-The configuration connects all three Railway services to this GitHub monorepo
-and builds each service from its own root directory. Secret values are imported
-as `preserve()` and never enter Git.
+Each service is built from its own directory in this monorepo. The `.railway/`
+directory is retained only as a record of the previous Railway deployment and
+does not describe the current Yandex Cloud infrastructure.
 
 ## Telegram
 
