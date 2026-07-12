@@ -1378,10 +1378,13 @@ async function finalizeVerifiedJob(job, evidence) {
   await safeDeleteObject(job.key);
   job.amazonStatus = evidence?.status || "in_library";
   job.verificationEvidence = evidence;
+  job.error = "";
+  job.resumeVerification = false;
   job.verifiedAt = new Date().toISOString();
   job.status = "sent";
   job.sentAt = job.verifiedAt;
   job.updatedAt = job.sentAt;
+  lastWorkerError = "";
   await saveQueue();
   console.log(
     "Kindle job delivery accepted by Amazon",
