@@ -75,6 +75,9 @@ export default defineRailway(() => {
     },
     healthcheck: "/health",
     healthcheckTimeout: 300,
+    deploy: {
+      restartPolicyType: "ALWAYS",
+    },
     replicas: 1,
     volumeMounts: {
       "/data": kindleUploaderVolume,

@@ -29,6 +29,7 @@ import { validateResumableChunk } from "./upload-progress.mjs";
 import {
   normalizeKindlePdfFileName
 } from "./kindle-filename.mjs";
+import { canRecycleIdleUploader } from "./idle-recycle.mjs";
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || "/data";
@@ -48,6 +49,10 @@ const SEND_TO_KINDLE_URL =
 const MAX_FILE_SIZE = 200_000_000;
 const BROWSER_IDLE_MS = Number(
   process.env.BROWSER_IDLE_MS || 60_000
+);
+const IDLE_RECYCLE_MS = Math.max(
+  30_000,
+  Number(process.env.IDLE_RECYCLE_MS || 120_000)
 );
 const SHARED_SECRET = requiredEnv("KINDLE_SHARED_SECRET");
 const PUBLIC_BASE_URL = requiredEnv("PUBLIC_BASE_URL")
@@ -81,6 +86,8 @@ let browserPage = null;
 let browserStarting = null;
 let browserClosing = null;
 let browserIdleTimer = null;
+let uploaderRecycleTimer = null;
+let recycleEligible = false;
 let displayRuntimeStarting = null;
 let displayRuntimeStopping = null;
 let xvfbProcess = null;
@@ -643,6 +650,7 @@ async function shutdown(signal) {
   shuttingDown = true;
   console.log("Received " + signal + ", stopping Kindle runtime");
   clearBrowserIdleTimer();
+  clearUploaderRecycleTimer();
   try {
     await browserContext?.close();
   } catch (error) {
@@ -651,6 +659,7 @@ async function shutdown(signal) {
   browserContext = null;
   browserPage = null;
   await stopDisplayRuntime();
+  await Promise.allSettled([queueWrite, sessionWrite]);
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 10_000).unref();
 }
@@ -663,6 +672,7 @@ setInterval(() => {
   pruneTokens(connectTokens);
   kickQueue();
   scheduleBrowserCloseIfIdle();
+  scheduleUploaderRecycleIfIdle();
 }, 30_000).unref();
 
 async function ensureBrowser() {
@@ -671,6 +681,8 @@ async function ensureBrowser() {
   }
 
   clearBrowserIdleTimer();
+  clearUploaderRecycleTimer();
+  recycleEligible = false;
 
   if (browserContext && browserPage && !browserPage.isClosed()) {
     browserPage = pickBestBrowserPage() || browserPage;
@@ -944,10 +956,65 @@ async function closeBrowserIfIdle() {
     }
     await stopDisplayRuntime();
     console.log("Closed idle Chromium");
+    recycleEligible = true;
+    scheduleUploaderRecycleIfIdle();
     return true;
   } finally {
     browserClosing = null;
   }
+}
+
+function clearUploaderRecycleTimer() {
+  if (!uploaderRecycleTimer) return;
+  clearTimeout(uploaderRecycleTimer);
+  uploaderRecycleTimer = null;
+}
+
+function scheduleUploaderRecycleIfIdle() {
+  if (
+    uploaderRecycleTimer ||
+    !recycleEligible ||
+    shuttingDown
+  ) return;
+
+  uploaderRecycleTimer = setTimeout(() => {
+    uploaderRecycleTimer = null;
+    void recycleUploaderIfIdle().catch((error) => {
+      lastWorkerError = errorMessage(error);
+      console.error("Cannot recycle idle Kindle uploader", error);
+      scheduleUploaderRecycleIfIdle();
+    });
+  }, IDLE_RECYCLE_MS);
+  uploaderRecycleTimer.unref();
+}
+
+async function recycleUploaderIfIdle() {
+  pruneTokens(uploadTickets);
+  pruneTokens(connectTokens);
+
+  const canRecycle = canRecycleIdleUploader({
+    recycleEligible,
+    shuttingDown,
+    browserRunning: isBrowserRunning(),
+    browserStarting: Boolean(browserStarting),
+    browserClosing: Boolean(browserClosing),
+    displayRuntimeRunning: isDisplayRuntimeRunning(),
+    vncRunning: isVncServerRunning(),
+    queueRunning,
+    hasPendingQueueJob: Boolean(nextQueueJob()),
+    activeVncConnections,
+    uploadTicketCount: uploadTickets.size,
+    connectTokenCount: connectTokens.size
+  });
+
+  if (!canRecycle) {
+    scheduleUploaderRecycleIfIdle();
+    return false;
+  }
+
+  console.log("Recycling idle Kindle uploader to release Chromium memory");
+  await shutdown("idle recycle");
+  return true;
 }
 
 function pickBestBrowserPage() {
