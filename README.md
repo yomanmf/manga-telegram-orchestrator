@@ -68,11 +68,10 @@ Storage bucket, and two persistent disks:
 - the `kindle-pdf-queue` Object Storage bucket temporarily stores PDFs between
   services through its S3-compatible API.
 
-The Kindle queue advances after the Send action clears Amazon's `Ready to send`
-state without an immediate error. The later `In library` label is not a blocking
-delivery condition because device delivery can finish before that web status
-appears. A submitted file is not uploaded again merely because `In library` is
-delayed, including after a service restart.
+The Kindle queue advances only after Amazon confirms the submitted PDF as `In
+library`. This prevents the next upload from replacing the previous pending
+submission in the Send to Kindle page. Device synchronization remains
+asynchronous after that confirmation.
 
 Secrets are never committed. The Yandex Cloud runtime stores the Telegram
 token, webhook secret, web application password and session token, Kindle
@@ -81,6 +80,9 @@ shared secret, and Object Storage credentials.
 Each application's variables are documented in its `.env.example` file.
 
 Each service is built from its own directory in this monorepo.
+
+The bot caps each generated PDF volume at 150 MB, leaving room below the
+provider's hard upload limit for reliable delivery to Kindle devices.
 
 ## Telegram
 

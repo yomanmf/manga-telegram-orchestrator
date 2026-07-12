@@ -229,8 +229,8 @@ export class Orchestrator {
         return;
       }
       if (entries.every((entry) => entry.status === "sent")) {
-        this.store.updateJob(job.id, { status: "completed", kindleJobs: entries, progress: "Amazon подтвердил отправку всех файлов" });
-        await this.telegram.sendMessage(job.chatId, `Готово: Amazon подтвердил отправку ${entries.length} PDF на Kindle.`);
+        this.store.updateJob(job.id, { status: "completed", kindleJobs: entries, progress: "Amazon принял все PDF к доставке" });
+        await this.telegram.sendMessage(job.chatId, `Готово: Amazon принял ${entries.length} PDF к доставке. Синхронизация с Kindle может занять время.`);
         return;
       }
       if (entries.some((entry) => entry.status === "waiting_auth")) {

@@ -43,7 +43,7 @@ export function normalizeLoadedJob(job) {
     job.submittedAt &&
     !job.sentAt
   ) {
-    return { ...job, resumeSubmission: true };
+    return { ...job, resumeVerification: true };
   }
   if (job.status === "processing") {
     return { ...job, status: "queued" };
@@ -52,7 +52,7 @@ export function normalizeLoadedJob(job) {
     return {
       ...job,
       status: "queued",
-      resumeSubmission: Boolean(job.submittedAt)
+      resumeVerification: Boolean(job.submittedAt && job.verificationBaseline)
     };
   }
   return job;

@@ -6,6 +6,9 @@ import { Orchestrator } from "./orchestrator.mjs";
 import { createStore } from "./store.mjs";
 import { createTelegram } from "./telegram.mjs";
 
+const DEFAULT_MAX_PDF_BYTES = 150_000_000;
+const MAX_ALLOWED_PDF_BYTES = 150_000_000;
+
 const config = readConfig(process.env);
 const missingConfiguration = requiredNames(config);
 const ready = missingConfiguration.length === 0;
@@ -103,10 +106,10 @@ function readConfig(env) {
     kindleSharedSecret: optional(env, "KINDLE_SHARED_SECRET"),
     publicBaseUrl: String(env.PUBLIC_BASE_URL || "").replace(/\/$/, ""),
     adminToken: env.ADMIN_API_TOKEN || "",
-    maxPdfBytes: Number(env.MAX_PDF_BYTES || 193986560)
+    maxPdfBytes: Number(env.MAX_PDF_BYTES || DEFAULT_MAX_PDF_BYTES)
   };
-  if (!Number.isFinite(config.maxPdfBytes) || config.maxPdfBytes < 10_000_000 || config.maxPdfBytes > 199_000_000) {
-    throw new Error("MAX_PDF_BYTES must be between 10 MB and 199 MB");
+  if (!Number.isFinite(config.maxPdfBytes) || config.maxPdfBytes < 10_000_000 || config.maxPdfBytes > MAX_ALLOWED_PDF_BYTES) {
+    throw new Error("MAX_PDF_BYTES must be between 10 MB and 150 MB");
   }
   return config;
 }

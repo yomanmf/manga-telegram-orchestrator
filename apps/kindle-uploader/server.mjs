@@ -19,6 +19,7 @@ import { WebSocketServer } from "ws";
 
 import {
   evaluateSubmissionEvidence,
+  firstNewEvidence,
   normalizeLoadedJob
 } from "./submission.mjs";
 import {
@@ -1104,11 +1105,6 @@ async function runQueue() {
         return;
       }
 
-      if (job.resumeSubmission && job.submittedAt) {
-        await processQueueJob(job);
-        continue;
-      }
-
       if (!await checkKindleSession()) {
         await markJobWaitingForAuth(job);
         return;
@@ -1148,14 +1144,38 @@ async function markJobWaitingForAuth(job) {
 
 async function processQueueJob(job) {
   if (
-    job.resumeSubmission &&
+    job.resumeVerification &&
     job.submittedAt
   ) {
-    job.resumeSubmission = false;
-    await finalizeSubmittedJob(job, {
-      status: "submitted",
-      row: "Recovered a previously submitted job after restart"
+    if (!job.verificationBaseline) {
+      await finalizeVerifiedJob(job, {
+        status: "submitted",
+        row: "Recovered a legacy submitted job without delivery evidence"
+      });
+      return;
+    }
+    job.status = "verifying";
+    job.resumeVerification = false;
+    job.error = "";
+    job.updatedAt = new Date().toISOString();
+    await saveQueue();
+
+    const page = await ensureBrowser();
+    await page.goto(SEND_TO_KINDLE_URL, {
+      waitUntil: "domcontentloaded"
     });
+
+    try {
+      const evidence = await waitForAmazonLibraryConfirmation(
+        page,
+        job.filename,
+        job.verificationBaseline
+      );
+      await finalizeVerifiedJob(job, evidence);
+    } catch (error) {
+      await saveKindleDiagnostic(page, job, error);
+      throw error;
+    }
     return;
   }
 
@@ -1188,22 +1208,23 @@ async function processQueueJob(job) {
     });
   }
 
-  await finalizeSubmittedJob(
+  await finalizeVerifiedJob(
     job,
     job.verificationEvidence
   );
 }
 
-async function finalizeSubmittedJob(job, evidence) {
+async function finalizeVerifiedJob(job, evidence) {
   await safeDeleteObject(job.key);
-  job.amazonStatus = evidence?.status || "submitted";
+  job.amazonStatus = evidence?.status || "in_library";
   job.verificationEvidence = evidence;
+  job.verifiedAt = new Date().toISOString();
   job.status = "sent";
-  job.sentAt = new Date().toISOString();
+  job.sentAt = job.verifiedAt;
   job.updatedAt = job.sentAt;
   await saveQueue();
   console.log(
-    "Kindle job accepted by Amazon",
+    "Kindle job verified in Amazon library",
     job.id,
     job.filename
   );
@@ -1219,6 +1240,9 @@ async function recordQueueJobFailure(job, error) {
     await saveSessionState();
   } else {
     job.status = job.attempts >= 3 ? "failed" : "queued";
+    if (job.status === "queued" && job.submittedAt && job.verificationBaseline) {
+      job.resumeVerification = true;
+    }
   }
   job.error = message;
   job.updatedAt = new Date().toISOString();
@@ -1283,7 +1307,7 @@ async function uploadFileToKindle(filePath, job) {
   );
 
   try {
-    return await waitForAmazonSubmissionAcknowledgement(
+    return await waitForAmazonLibraryConfirmation(
       page,
       filename,
       baseline
@@ -1350,13 +1374,12 @@ async function requireAddToLibrary(page) {
   }
 }
 
-async function waitForAmazonSubmissionAcknowledgement(
+async function waitForAmazonLibraryConfirmation(
   page,
   filename,
   baseline
 ) {
-  const deadline = Date.now() + 30_000;
-  let acknowledgedObservations = 0;
+  const deadline = Date.now() + 15 * 60_000;
 
   while (Date.now() < deadline) {
     if (/signin|ap\/signin/i.test(page.url())) {
@@ -1364,26 +1387,31 @@ async function waitForAmazonSubmissionAcknowledgement(
     }
 
     const evidence = await collectKindleEvidence(page, filename);
-    const result = evaluateSubmissionEvidence(evidence, baseline);
-    if (result.state === "failed") {
-      throw new Error(result.message);
-    }
-    if (result.state === "acknowledged") {
-      acknowledgedObservations += 1;
-      if (acknowledgedObservations >= 3) {
-        return result.evidence;
-      }
-    } else {
-      acknowledgedObservations = 0;
+    const newFailure = firstNewEvidence(
+      evidence.failureRows,
+      baseline.failureRows
+    );
+    if (newFailure) {
+      throw new Error(newFailure);
     }
 
-    await page.waitForTimeout(1_000);
+    const newInLibrary = firstNewEvidence(
+      evidence.inLibraryRows,
+      baseline.inLibraryRows
+    );
+    if (newInLibrary) {
+      return {
+        status: "in_library",
+        row: newInLibrary
+      };
+    }
+
+    await page.waitForTimeout(1_500);
   }
 
-  return {
-    status: "submitted_unconfirmed",
-    row: "Send was clicked and Amazon showed no immediate failure"
-  };
+  throw new Error(
+    "Amazon did not confirm the PDF as In Library within 15 minutes"
+  );
 }
 
 async function collectKindleEvidence(page, filename) {

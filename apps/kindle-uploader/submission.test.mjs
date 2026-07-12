@@ -34,7 +34,7 @@ test("reports a new Amazon failure before accepting submission", () => {
   ), { state: "failed", message: "manga.pdf could not be sent" });
 });
 
-test("resumes a submitted verifying job without uploading it again", () => {
+test("resumes verification for a submitted job without uploading it again", () => {
   assert.deepEqual(normalizeLoadedJob({
     id: "job-1",
     status: "verifying",
@@ -43,7 +43,7 @@ test("resumes a submitted verifying job without uploading it again", () => {
     id: "job-1",
     status: "queued",
     submittedAt: "2026-07-11T20:09:28.756Z",
-    resumeSubmission: true
+    resumeVerification: false
   });
 });
 
@@ -58,7 +58,7 @@ test("keeps a legacy queued submission from being uploaded again", () => {
     status: "queued",
     submittedAt: "2026-07-11T20:09:28.756Z",
     sentAt: null,
-    resumeSubmission: true
+    resumeVerification: true
   });
 });
 

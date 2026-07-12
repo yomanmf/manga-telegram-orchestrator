@@ -150,7 +150,7 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
   assert.deepEqual(chapterProgress.map(({ text }) => text.match(/(\d+\/\d+)/)[1]), ["4/4"]);
   assert.ok(messages.some(({ text }) => text.includes("Собираю итоговые PDF")));
   assert.ok(messages.some(({ text }) => text.includes("Передаю в Kindle")));
-  assert.match(messages.at(-1).text, /Amazon подтвердил/);
+  assert.match(messages.at(-1).text, /Amazon принял/);
   await assert.rejects(fs.access(`${directory}/work/${job.id}`), /ENOENT/);
 });
 
