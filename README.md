@@ -11,7 +11,6 @@ apps/
 ├── manga-bot-worker/       Telegram webhook, job queue, PDF collector
 ├── manga-pdf-processor/    web UI, WeebCentral, page processing
 └── kindle-uploader/        S3 queue, Playwright, Chromium, and noVNC
-.railway/                   Legacy Railway configuration (pre-migration)
 .github/workflows/ci.yml    checks for all services
 ```
 
@@ -81,9 +80,7 @@ shared secret, and Object Storage credentials.
 
 Each application's variables are documented in its `.env.example` file.
 
-Each service is built from its own directory in this monorepo. The `.railway/`
-directory is retained only as a record of the previous Railway deployment and
-does not describe the current Yandex Cloud infrastructure.
+Each service is built from its own directory in this monorepo.
 
 ## Telegram
 

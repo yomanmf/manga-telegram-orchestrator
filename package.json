@@ -9,8 +9,5 @@
     "check": "npm --prefix apps/manga-bot-worker run check && npm --prefix apps/manga-pdf-processor run check && npm --prefix apps/kindle-uploader run check",
     "test": "npm --prefix apps/manga-bot-worker test && npm --prefix apps/manga-pdf-processor test && npm --prefix apps/kindle-uploader test",
     "verify": "npm run check && npm test"
-  },
-  "devDependencies": {
-    "railway": "^3.5.5"
   }
 }
