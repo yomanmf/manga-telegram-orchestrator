@@ -18,6 +18,7 @@ import { chromium } from "playwright";
 import { WebSocketServer } from "ws";
 
 import {
+  evaluateBatchPageText,
   evaluateSubmissionEvidence,
   firstNewEvidence,
   normalizeLoadedJob
@@ -322,6 +323,14 @@ app.post(
     for (const job of jobs) {
       if (!job.batchStartedAt) {
         job.batchStartedAt = startedAt;
+        changed = true;
+      }
+      if (job.status === "failed") {
+        job.status = "queued";
+        job.attempts = 0;
+        job.error = "";
+        job.resumeVerification = Boolean(job.submittedAt);
+        job.updatedAt = startedAt;
         changed = true;
       }
     }
@@ -1326,10 +1335,9 @@ async function processQueueBatch(batchId) {
 
   try {
     for (const job of jobs) {
-      const tempPath = path.join(
-        batchTempDir,
-        sanitizeFileName(job.id + "-" + job.filename)
-      );
+      const jobTempDir = path.join(batchTempDir, sanitizeFileName(job.id));
+      await fsp.mkdir(jobTempDir, { recursive: true });
+      const tempPath = path.join(jobTempDir, sanitizeFileName(job.filename));
       await downloadObject(job.key, tempPath);
       files.push({ job, tempPath });
     }
@@ -1355,19 +1363,7 @@ async function verifySubmittedBatch(jobs) {
     waitUntil: "domcontentloaded"
   });
 
-  const evidence = new Map();
-  for (const job of jobs) {
-    const result = await waitForAmazonLibraryConfirmation(
-      page,
-      job.filename,
-      job.verificationBaseline || {
-        readyRows: [],
-        inLibraryRows: [],
-        failureRows: []
-      }
-    );
-    evidence.set(job.id, result);
-  }
+  const evidence = await waitForAmazonBatchConfirmation(page, jobs);
   for (const job of jobs) {
     await finalizeVerifiedJob(job, evidence.get(job.id));
   }
@@ -1483,10 +1479,17 @@ async function uploadFilesToKindle(filePaths, jobs) {
     waitUntil: "domcontentloaded"
   });
 
-  await clearExistingKindleFiles(page);
-  await selectKindleFiles(page, filePaths);
-  const baselines = await waitForKindleFilesReady(page, jobs);
-  await requireAddToLibrary(page);
+  let baselines;
+  try {
+    await clearExistingKindleFiles(page);
+    await selectKindleFiles(page, filePaths);
+    await ensureKindleFileDetails(page, jobs);
+    baselines = await waitForKindleFilesReady(page, jobs);
+    await requireAddToLibrary(page);
+  } catch (error) {
+    await saveKindleDiagnostic(page, jobs[0], error);
+    throw error;
+  }
 
   for (const job of jobs) {
     job.verificationBaseline = baselines.get(job.id);
@@ -1508,15 +1511,7 @@ async function uploadFilesToKindle(filePaths, jobs) {
   );
 
   try {
-    const evidence = new Map();
-    for (const job of jobs) {
-      evidence.set(job.id, await waitForAmazonLibraryConfirmation(
-        page,
-        job.filename,
-        job.verificationBaseline
-      ));
-    }
-    return evidence;
+    return await waitForAmazonBatchConfirmation(page, jobs);
   } catch (error) {
     await saveKindleDiagnostic(page, jobs[0], error);
     throw error;
@@ -1563,6 +1558,147 @@ async function selectKindleFiles(page, filePaths) {
   }
 }
 
+async function ensureKindleFileDetails(page, jobs) {
+  for (const job of jobs) {
+    const filename = job.filename;
+    const filenameElement = page.getByText(filename, { exact: true }).first();
+    await filenameElement.waitFor({
+      state: "visible",
+      timeout: 120_000
+    });
+    let titleInput = await findTitleInputForFile(page, filename);
+    if (!titleInput) {
+      await toggleKindleFileDetails(filenameElement);
+      await page.waitForTimeout(250);
+      titleInput = await findTitleInputForFile(page, filename);
+    }
+
+    if (!titleInput) {
+      console.log("Kindle title input is not available yet", filename);
+      continue;
+    }
+    const title = filename.replace(/\.pdf$/i, "").slice(0, 200);
+    await titleInput.click();
+    await titleInput.press("Control+A");
+    await titleInput.pressSequentially(title, { delay: 5 });
+    await titleInput.press("Tab");
+    const authorInput = await firstVisibleLocator(
+      page.locator('input[aria-label^="Author" i]')
+    );
+    if (authorInput) {
+      await authorInput.click();
+      await authorInput.press("Control+A");
+      await authorInput.pressSequentially("Personal Document", { delay: 5 });
+      await authorInput.press("Tab");
+    }
+    const originalLayout = await firstVisibleLocator(
+      page.locator(
+        'input[type="radio"][aria-label^="Keep original layout" i]'
+      )
+    );
+    if (originalLayout && !(await originalLayout.isChecked())) {
+      await originalLayout.check();
+    }
+    await page.waitForTimeout(1_000);
+    console.log("Kindle file title updated", filename);
+    await toggleKindleFileDetails(filenameElement);
+    await page.waitForTimeout(150);
+  }
+}
+
+async function firstVisibleLocator(locator) {
+  const count = await locator.count();
+  for (let index = 0; index < count; index += 1) {
+    const candidate = locator.nth(index);
+    if (await candidate.isVisible().catch(() => false)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+async function toggleKindleFileDetails(filenameElement) {
+  const toggled = await filenameElement.evaluate((element) => {
+    const filenameRect = element.getBoundingClientRect();
+    let container = element;
+    for (let depth = 0; container && depth < 10; depth += 1) {
+      const controls = Array.from(
+        container.querySelectorAll('button, [role="button"]')
+      ).filter((control) => {
+        const rect = control.getBoundingClientRect();
+        const style = window.getComputedStyle(control);
+        return rect.width > 0 &&
+          rect.height > 0 &&
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          rect.right <= filenameRect.left + 24;
+      });
+      if (controls.length > 0) {
+        controls.sort((left, right) =>
+          right.getBoundingClientRect().right -
+          left.getBoundingClientRect().right
+        );
+        controls[0].click();
+        return true;
+      }
+      container = container.parentElement;
+    }
+    return false;
+  });
+  if (!toggled) {
+    throw new Error("Amazon file details toggle was not found");
+  }
+}
+
+async function findTitleInputForFile(page, filename) {
+  const titleInputs = page.getByLabel(/title/i);
+  const count = await titleInputs.count();
+  let fallback = null;
+  for (let index = 0; index < count; index += 1) {
+    const candidate = titleInputs.nth(index);
+    if (!(await candidate.isVisible().catch(() => false))) continue;
+    if (!String(await candidate.inputValue()).trim()) {
+      fallback ||= candidate;
+    }
+    const belongsToFile = await candidate.evaluate((input, expected) => {
+      let element = input;
+      for (let depth = 0; element && depth < 10; depth += 1) {
+        const text = String(element.textContent || "")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (text.includes(expected)) return true;
+        element = element.parentElement;
+      }
+      return false;
+    }, filename);
+    if (belongsToFile) return candidate;
+  }
+  if (fallback) return fallback;
+
+  const textInputs = page.locator(
+    'input[type="text"], input:not([type])'
+  );
+  const textInputCount = await textInputs.count();
+  for (let index = 0; index < textInputCount; index += 1) {
+    const candidate = textInputs.nth(index);
+    if (!(await candidate.isVisible().catch(() => false))) continue;
+    if (String(await candidate.inputValue()).trim()) continue;
+    const isTitleInput = await candidate.evaluate((input) => {
+      let element = input;
+      for (let depth = 0; element && depth < 6; depth += 1) {
+        const text = String(element.textContent || "")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (/title(?: \(required\))?/i.test(text)) return true;
+        element = element.parentElement;
+      }
+      return false;
+    });
+    if (isTitleInput) return candidate;
+  }
+  return null;
+}
+
 async function waitForKindleFileReady(page, filename) {
   const deadline = Date.now() + 120_000;
 
@@ -1588,35 +1724,209 @@ async function waitForKindleFileReady(page, filename) {
 }
 
 async function waitForKindleFilesReady(page, jobs) {
-  const deadline = Date.now() + 120_000;
+  const deadline = Date.now() + 20 * 60_000;
+  const filenames = jobs.map((job) => job.filename);
+  let nextProgressLog = 0;
 
   while (Date.now() < deadline) {
     if (/signin|ap\/signin/i.test(page.url())) {
       throw authRequired();
     }
 
-    const evidence = new Map();
-    let failure = "";
-    let allReady = true;
-    for (const job of jobs) {
-      const current = await collectKindleEvidence(page, job.filename);
-      evidence.set(job.id, current);
-      if (!failure && current.failureRows.length > 0) {
-        failure = current.failureRows[0];
+    const batch = await collectKindleBatchEvidence(page, filenames);
+    if (batch.ready && await isKindleSendEnabled(page)) {
+      const evidence = new Map();
+      for (const job of jobs) {
+        evidence.set(
+          job.id,
+          await collectKindleEvidence(page, job.filename)
+        );
       }
-      if (current.readyRows.length === 0) {
-        allReady = false;
-      }
+      return evidence;
     }
-    if (failure) throw new Error(failure);
-    if (allReady) return evidence;
+    if (batch.failureRows.length > 0) {
+      const titleFailure = batch.failureRows.find((row) =>
+        /title is required|file detail error/i.test(row)
+      );
+      if (titleFailure) {
+        console.log(
+          "Kindle batch requires file titles; filling details"
+        );
+        await ensureKindleFileDetails(page, jobs);
+        await page.waitForTimeout(500);
+        continue;
+      }
+      throw new Error(batch.failureRows[0]);
+    }
+    if (Date.now() >= nextProgressLog) {
+      console.log(
+        "Kindle batch preparation progress",
+        `${batch.presentFilenames.length}/${filenames.length} files visible`,
+        batch.missingFilenames.length > 0
+          ? `waiting for: ${batch.missingFilenames.join(", ")}`
+          : "waiting for Amazon Ready to Send"
+      );
+      nextProgressLog = Date.now() + 15_000;
+    }
 
     await page.waitForTimeout(1_000);
   }
 
   throw new Error(
-    "Amazon did not finish preparing the selected PDF batch"
+    "Amazon did not finish preparing the selected PDF batch within 20 minutes"
   );
+}
+
+async function isKindleSendEnabled(page) {
+  const candidates = [
+    page.getByRole("button", { name: /^send$/i }),
+    page.locator('button:has-text("Send")'),
+    page.locator('input[type="button"][value="Send"]'),
+    page.locator('input[type="submit"][value="Send"]')
+  ];
+  for (const locator of candidates) {
+    const count = await locator.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      const candidate = locator.nth(index);
+      if (!(await candidate.isVisible().catch(() => false))) continue;
+      if (!(await candidate.isEnabled().catch(() => false))) continue;
+      if (await candidate.getAttribute("aria-disabled") === "true") continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+async function waitForAmazonBatchConfirmation(page, jobs) {
+  const deadline = Date.now() + 15 * 60_000;
+  const filenames = jobs.map((job) => job.filename);
+  const confirmed = new Map();
+  let acknowledgedAt = 0;
+
+  while (Date.now() < deadline) {
+    if (/signin|ap\/signin/i.test(page.url())) {
+      throw authRequired();
+    }
+
+    const batch = await collectKindleBatchEvidence(page, filenames);
+    if (batch.failureRows.length > 0) {
+      throw new Error(batch.failureRows[0]);
+    }
+
+    for (const job of jobs) {
+      if (confirmed.has(job.id)) continue;
+      const baseline = job.verificationBaseline || {
+        readyRows: [],
+        inLibraryRows: [],
+        failureRows: []
+      };
+      const current = await collectKindleEvidence(page, job.filename);
+      const newFailure = firstNewEvidence(
+        current.failureRows,
+        baseline.failureRows
+      );
+      if (newFailure) throw new Error(newFailure);
+      const newInLibrary = firstNewEvidence(
+        current.inLibraryRows,
+        baseline.inLibraryRows
+      );
+      if (newInLibrary) {
+        confirmed.set(job.id, {
+          status: "in_library",
+          row: newInLibrary
+        });
+      }
+    }
+
+    if (
+      batch.inLibrary &&
+      !batch.ready &&
+      batch.presentFilenames.length === filenames.length
+    ) {
+      for (const job of jobs) {
+        if (!confirmed.has(job.id)) {
+          confirmed.set(job.id, {
+            status: "in_library",
+            row: "Amazon showed the complete batch In library"
+          });
+        }
+      }
+    }
+
+    if (confirmed.size === jobs.length) return confirmed;
+
+    if (!batch.ready) {
+      acknowledgedAt ||= Date.now();
+    } else {
+      acknowledgedAt = 0;
+    }
+
+    await page.waitForTimeout(1_500);
+  }
+
+  if (acknowledgedAt) {
+    for (const job of jobs) {
+      if (!confirmed.has(job.id)) {
+        confirmed.set(job.id, {
+          status: "submitted",
+          row: "Amazon cleared the complete Ready to Send batch"
+        });
+      }
+    }
+    return confirmed;
+  }
+
+  throw new Error(
+    "Amazon did not acknowledge the submitted PDF batch within 15 minutes"
+  );
+}
+
+async function collectKindleBatchEvidence(page, filenames) {
+  const snapshot = await page.evaluate((expectedFilenames) => {
+    const normalize = (value) => String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const bodyText = normalize(document.body?.innerText || "");
+    const failurePattern =
+      /could not be sent|failed|file detail error|please fix errors before sending|unsupported|rejected/i;
+    const expected = expectedFilenames.map(normalize);
+    const failureRows = Array.from(document.querySelectorAll("body *"))
+      .filter((element) => {
+        const text = normalize(element.textContent);
+        if (!text || text.length > 500 || !failurePattern.test(text)) {
+          return false;
+        }
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        if (
+          rect.width <= 0 ||
+          rect.height <= 0 ||
+          style.display === "none" ||
+          style.visibility === "hidden"
+        ) {
+          return false;
+        }
+        if (Array.from(element.children).some((child) =>
+          failurePattern.test(normalize(child.textContent)) &&
+          child.getBoundingClientRect().width > 0 &&
+          child.getBoundingClientRect().height > 0
+        )) {
+          return false;
+        }
+        return expected.some((filename) => text.includes(filename)) ||
+          !/\.pdf\b/i.test(text);
+      })
+      .map((element) => normalize(element.textContent));
+
+    return {
+      bodyText,
+      failureRows: Array.from(new Set(failureRows))
+    };
+  }, filenames);
+  return {
+    ...evaluateBatchPageText(snapshot.bodyText, filenames),
+    failureRows: snapshot.failureRows
+  };
 }
 
 async function requireAddToLibrary(page) {
@@ -1842,13 +2152,43 @@ async function saveKindleDiagnostic(page, job, error) {
       inLibraryRows: [],
       failureRows: []
     }));
+    const formControls = await page.evaluate(() =>
+      Array.from(document.querySelectorAll("input, textarea, select"))
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          let container = element;
+          for (let depth = 0; container && depth < 4; depth += 1) {
+            container = container.parentElement;
+          }
+          return {
+            tag: element.tagName.toLowerCase(),
+            type: element.getAttribute("type") || "",
+            name: element.getAttribute("name") || "",
+            id: element.id || "",
+            ariaLabel: element.getAttribute("aria-label") || "",
+            placeholder: element.getAttribute("placeholder") || "",
+            value: String(element.value || "").slice(0, 250),
+            visible:
+              rect.width > 0 &&
+              rect.height > 0 &&
+              style.display !== "none" &&
+              style.visibility !== "hidden",
+            nearbyText: String(container?.textContent || "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 500)
+          };
+        })
+    ).catch(() => []);
     await fsp.writeFile(
       base + ".json",
       JSON.stringify({
         job: publicJob(job),
         url: safePageUrl(),
         error: errorMessage(error),
-        evidence
+        evidence,
+        formControls
       }, null, 2)
     );
     job.diagnostic = path.basename(base);

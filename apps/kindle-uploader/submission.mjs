@@ -37,6 +37,28 @@ export function firstNewEvidence(current = [], baseline = []) {
   return "";
 }
 
+export function evaluateBatchPageText(bodyText, filenames = []) {
+  const normalize = (value) => String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const text = normalize(bodyText);
+  const expected = filenames.map(normalize).filter(Boolean);
+  const presentFilenames = expected.filter((filename) =>
+    text.includes(filename)
+  );
+  const missingFilenames = expected.filter((filename) =>
+    !text.includes(filename)
+  );
+  const allPresent = expected.length > 0 && missingFilenames.length === 0;
+
+  return {
+    ready: allPresent && /ready to send/i.test(text),
+    inLibrary: allPresent && /\bin library\b/i.test(text),
+    presentFilenames,
+    missingFilenames
+  };
+}
+
 export function normalizeLoadedJob(job) {
   if (
     job.status === "queued" &&
