@@ -90,6 +90,11 @@ provider's hard upload limit for reliable delivery to Kindle devices.
 
 ## Telegram
 
+Set `TELEGRAM_OWNER_USER_ID` to the owner's numeric Telegram user ID. The bot
+accepts messages and button callbacks only from that user in the user's private
+chat with the bot. The legacy `TELEGRAM_ALLOWED_CHAT_ID` variable is accepted
+during migration and is interpreted as the owner's user ID.
+
 Example command:
 
 ```text

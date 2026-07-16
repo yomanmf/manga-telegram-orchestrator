@@ -5,6 +5,7 @@ import { createMangaAppClient } from "./manga-app.mjs";
 import { Orchestrator } from "./orchestrator.mjs";
 import { createStore } from "./store.mjs";
 import { createTelegram } from "./telegram.mjs";
+import { isOwnerPrivateUpdate } from "./telegram-auth.mjs";
 
 const DEFAULT_MAX_PDF_BYTES = 150_000_000;
 const MAX_ALLOWED_PDF_BYTES = 150_000_000;
@@ -40,17 +41,17 @@ app.post("/telegram/webhook", async (req, res) => {
     return;
   }
   const update = req.body || {};
+  if (!isOwnerPrivateUpdate(update, config.ownerUserId)) {
+    console.warn("Rejected Telegram update from unauthorized sender or non-private chat");
+    res.sendStatus(200);
+    return;
+  }
   if (!store.rememberUpdate(update.update_id)) {
     res.sendStatus(200);
     return;
   }
   res.sendStatus(200);
   try {
-    const chatId = update.message?.chat?.id ?? update.callback_query?.message?.chat?.id;
-    if (String(chatId) !== config.allowedChatId) {
-      console.warn("Rejected Telegram update from unauthorized chat", chatId);
-      return;
-    }
     if (update.message) await orchestrator.handleMessage(update.message);
     if (update.callback_query) await orchestrator.handleCallback(update.callback_query);
   } catch (error) {
@@ -99,7 +100,7 @@ function readConfig(env) {
     dataDir: env.DATA_DIR || "/data",
     telegramToken: optional(env, "TELEGRAM_BOT_TOKEN"),
     webhookSecret: optional(env, "TELEGRAM_WEBHOOK_SECRET"),
-    allowedChatId: optional(env, "TELEGRAM_ALLOWED_CHAT_ID"),
+    ownerUserId: optional(env, "TELEGRAM_OWNER_USER_ID") || optional(env, "TELEGRAM_ALLOWED_CHAT_ID"),
     mangaAppUrl: optional(env, "MANGA_APP_URL"),
     mangaAppSessionToken: optional(env, "MANGA_APP_SESSION_TOKEN"),
     kindleWorkerUrl: optional(env, "KINDLE_WORKER_URL"),
@@ -110,6 +111,9 @@ function readConfig(env) {
   };
   if (!Number.isFinite(config.maxPdfBytes) || config.maxPdfBytes < 10_000_000 || config.maxPdfBytes > MAX_ALLOWED_PDF_BYTES) {
     throw new Error("MAX_PDF_BYTES must be between 10 MB and 150 MB");
+  }
+  if (config.ownerUserId && (!/^\d+$/.test(config.ownerUserId) || !Number.isSafeInteger(Number(config.ownerUserId)) || Number(config.ownerUserId) <= 0)) {
+    throw new Error("TELEGRAM_OWNER_USER_ID must be a positive Telegram user id");
   }
   return config;
 }
@@ -123,7 +127,7 @@ function requiredNames(config) {
   return [
     ["telegramToken", "TELEGRAM_BOT_TOKEN"],
     ["webhookSecret", "TELEGRAM_WEBHOOK_SECRET"],
-    ["allowedChatId", "TELEGRAM_ALLOWED_CHAT_ID"],
+    ["ownerUserId", "TELEGRAM_OWNER_USER_ID"],
     ["mangaAppUrl", "MANGA_APP_URL"],
     ["mangaAppSessionToken", "MANGA_APP_SESSION_TOKEN"],
     ["kindleWorkerUrl", "KINDLE_WORKER_URL"],
