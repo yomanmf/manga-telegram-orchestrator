@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check submission.mjs && node --check chromium-profile.mjs && node --check upload-progress.mjs && node --check kindle-filename.mjs && node --check idle-recycle.mjs",
+    "check": "node --check server.mjs && node --check submission.mjs && node --check chromium-profile.mjs && node --check upload-progress.mjs && node --check kindle-filename.mjs && node --check kindle-metadata.mjs && node --check idle-recycle.mjs",
     "test": "node --test *.test.mjs"
   },
   "dependencies": {

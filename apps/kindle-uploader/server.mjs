@@ -33,6 +33,10 @@ import {
   kindleContentTypeForFileName,
   normalizeKindleDocumentFileName
 } from "./kindle-filename.mjs";
+import {
+  KINDLE_DOCUMENT_AUTHOR,
+  kindleDocumentTitle
+} from "./kindle-metadata.mjs";
 import { canRecycleIdleUploader } from "./idle-recycle.mjs";
 
 const PORT = Number(process.env.PORT || 3000);
@@ -1591,7 +1595,7 @@ async function ensureKindleFileDetails(page, jobs) {
       console.log("Kindle title input is not available yet", filename);
       continue;
     }
-    const title = filename.replace(/\.(?:pdf|epub)$/i, "").slice(0, 200);
+    const title = kindleDocumentTitle(filename);
     await titleInput.click();
     await titleInput.press("Control+A");
     await titleInput.pressSequentially(title, { delay: 5 });
@@ -1602,7 +1606,7 @@ async function ensureKindleFileDetails(page, jobs) {
     if (authorInput) {
       await authorInput.click();
       await authorInput.press("Control+A");
-      await authorInput.pressSequentially("Personal Document", { delay: 5 });
+      await authorInput.pressSequentially(KINDLE_DOCUMENT_AUTHOR, { delay: 5 });
       await authorInput.press("Tab");
     }
     const originalLayout = await firstVisibleLocator(
