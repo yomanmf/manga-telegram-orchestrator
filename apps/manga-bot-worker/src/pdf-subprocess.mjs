@@ -21,7 +21,7 @@ export async function buildKindleVolumesInSubprocess(options) {
     await runWorker(configPath, resultPath);
     const volumes = JSON.parse(await fs.readFile(resultPath, "utf8"));
     if (!Array.isArray(volumes) || volumes.some((volume) => !volume.filePath || !volume.fileName)) {
-      throw new Error("PDF assembly subprocess returned an invalid result");
+      throw new Error("Kindle book assembly subprocess returned an invalid result");
     }
     return volumes;
   } finally {
@@ -49,7 +49,7 @@ function runWorker(configPath, resultPath) {
         return;
       }
       reject(new Error(
-        `PDF assembly subprocess failed (${signal || code})${stderr.trim() ? `: ${stderr.trim()}` : ""}`
+        `Kindle book assembly subprocess failed (${signal || code})${stderr.trim() ? `: ${stderr.trim()}` : ""}`
       ));
     });
   });

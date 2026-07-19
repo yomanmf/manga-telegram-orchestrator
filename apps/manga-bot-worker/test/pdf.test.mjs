@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import JSZip from "jszip";
 import { PDFDocument } from "pdf-lib";
 import { buildKindleVolumes, mergePdfBuffers } from "../src/pdf.mjs";
 import { buildKindleVolumesInSubprocess } from "../src/pdf-subprocess.mjs";
@@ -28,6 +29,8 @@ test("merges source PDFs and splits on a configured size", async () => {
   assert.equal(volumes.length, 1);
   assert.ok(volumes[0].size > 0);
   assert.equal(volumes[0].fileName, "Fable Chapter 201-Chapter 202.pdf");
+  assert.equal(volumes[0].firstChapterTitle, "Chapter 201");
+  assert.equal(volumes[0].lastChapterTitle, "Chapter 202");
 });
 
 test("places an unpaired vertical page on the right side of a landscape spread", async () => {
@@ -145,16 +148,93 @@ test("assembles volumes in a one-shot subprocess", async () => {
   const pdf = await PDFDocument.create();
   pdf.addPage([300, 400]).drawRectangle({ x: 0, y: 0, width: 1, height: 1 });
   const filePath = path.join(directory, "chapter.pdf");
+  const coverPath = path.join(directory, "cover.png");
   await fs.writeFile(filePath, await pdf.save());
+  await fs.writeFile(coverPath, Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64"
+  ));
 
   const volumes = await buildKindleVolumesInSubprocess({
     sourcePdfs: [{ name: "chapter.pdf", chapterTitle: "Chapter 1", filePath }],
     destinationDir: path.join(directory, "out"),
     baseName: "Subprocess",
     maxBytes: 10_000_000,
-    mergeVerticalPages: true
+    mergeVerticalPages: true,
+    coverPath,
+    coverLookup: false
   });
   assert.equal(volumes.length, 1);
-  assert.equal(volumes[0].fileName, "Subprocess Chapter 1.pdf");
+  assert.equal(volumes[0].fileName, "Subprocess Chapter 1.epub");
+  assert.equal(volumes[0].format, "epub");
+  assert.equal(volumes[0].coverChapterNumber, "1");
+  assert.equal(volumes[0].coverSource, "series fallback");
   assert.ok((await fs.stat(volumes[0].filePath)).size > 0);
+});
+
+test("packages every split Kindle volume as a covered EPUB", async () => {
+  const directory = `/tmp/manga-covered-split-test-${Date.now()}-${Math.random()}`;
+  await fs.mkdir(directory, { recursive: true });
+  const sources = [];
+  for (let index = 0; index < 2; index += 1) {
+    const pdf = await PDFDocument.create();
+    for (let pageIndex = 0; pageIndex < 1; pageIndex += 1) {
+      pdf.addPage([600, 900]).drawRectangle({
+        x: index + pageIndex,
+        y: index,
+        width: 10,
+        height: 10
+      });
+    }
+    const filePath = path.join(directory, `chapter-${index + 1}.pdf`);
+    await fs.writeFile(filePath, await pdf.save({ useObjectStreams: true }));
+    sources.push({
+      name: `chapter-${index + 1}.pdf`,
+      chapterTitle: `Chapter ${index + 1}`,
+      filePath
+    });
+  }
+
+  const [single] = await buildKindleVolumes({
+    sourcePdfs: [sources[0]],
+    destinationDir: path.join(directory, "single"),
+    baseName: "Solanin",
+    maxBytes: 10_000_000,
+    mergeVerticalPages: false
+  });
+  const [combined] = await buildKindleVolumes({
+    sourcePdfs: sources,
+    destinationDir: path.join(directory, "combined"),
+    baseName: "Solanin",
+    maxBytes: 10_000_000,
+    mergeVerticalPages: false
+  });
+  const cover = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64"
+  );
+  const coverPath = path.join(directory, "cover.png");
+  await fs.writeFile(coverPath, cover);
+
+  const volumes = await buildKindleVolumesInSubprocess({
+    sourcePdfs: sources,
+    destinationDir: path.join(directory, "out"),
+    baseName: "Solanin",
+    maxBytes: Math.floor((single.size + combined.size) / 2),
+    mergeVerticalPages: false,
+    coverPath,
+    coverLookup: false
+  });
+
+  assert.equal(volumes.length, 2);
+  for (const volume of volumes) {
+    assert.equal(volume.format, "epub");
+    assert.match(volume.fileName, /[.]epub$/i);
+    const archive = await JSZip.loadAsync(await fs.readFile(volume.filePath));
+    const opf = await archive.file("OEBPS/content.opf").async("string");
+    assert.match(opf, /properties="cover-image"/);
+    assert.match(opf, /<spine[^>]*><itemref idref="page-0001"/);
+    assert.deepEqual(await archive.file("OEBPS/images/cover.png").async("nodebuffer"), cover);
+    assert.equal(archive.file("OEBPS/cover.xhtml"), null);
+  }
 });

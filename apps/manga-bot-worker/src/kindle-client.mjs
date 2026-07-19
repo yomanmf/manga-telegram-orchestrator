@@ -23,6 +23,7 @@ export function createKindleClient({ baseUrl, sharedSecret }) {
     connectToken() { return api("/api/connect-token", { method: "POST" }); },
     async enqueueFile(filePath, filename, options = {}) {
       const { size } = await fs.promises.stat(filePath);
+      const contentType = /[.]epub$/i.test(filename) ? "application/epub+zip" : "application/pdf";
       const ticket = await api("/api/tickets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -35,12 +36,12 @@ export function createKindleClient({ baseUrl, sharedSecret }) {
       });
       const upload = await fetch(ticket.uploadUrl, {
         method: "PUT",
-        headers: { "Content-Type": "application/pdf", "Content-Length": String(size) },
+        headers: { "Content-Type": contentType, "Content-Length": String(size) },
         body: fs.createReadStream(filePath),
         duplex: "half"
       });
       const data = await upload.json().catch(() => ({}));
-      if (!upload.ok) throw new Error(data.error || `Kindle PDF upload failed (${upload.status})`);
+      if (!upload.ok) throw new Error(data.error || `Kindle file upload failed (${upload.status})`);
       return data.job;
     },
     startBatch(batchId) {

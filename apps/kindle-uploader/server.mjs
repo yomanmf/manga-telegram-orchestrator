@@ -30,7 +30,8 @@ import {
 } from "./chromium-profile.mjs";
 import { validateResumableChunk } from "./upload-progress.mjs";
 import {
-  normalizeKindlePdfFileName
+  kindleContentTypeForFileName,
+  normalizeKindleDocumentFileName
 } from "./kindle-filename.mjs";
 import { canRecycleIdleUploader } from "./idle-recycle.mjs";
 
@@ -266,11 +267,12 @@ app.post(
       return;
     }
 
-    if (!requestedFilename.toLowerCase().endsWith(".pdf")) {
-      res.status(400).json({ error: "Only PDF files are supported" });
+    if (!/\.(?:pdf|epub)$/i.test(requestedFilename)) {
+      res.status(400).json({ error: "Only PDF and EPUB files are supported" });
       return;
     }
-    const filename = normalizeKindlePdfFileName(requestedFilename);
+    const filename = normalizeKindleDocumentFileName(requestedFilename);
+    const contentType = kindleContentTypeForFileName(filename);
     if (!Number.isFinite(size) || size <= 0 || size > MAX_FILE_SIZE) {
       res.status(400).json({
         error: "File must be between 1 byte and 200 MB"
@@ -285,6 +287,7 @@ app.post(
       id,
       token,
       filename,
+      contentType,
       size,
       batchId,
       deferQueue,
@@ -429,7 +432,7 @@ app.put("/upload/:id", async (req, res) => {
         Bucket: bucketName,
         Key: objectKey,
         Body: req,
-        ContentType: "application/pdf"
+        ContentType: ticket.contentType
       },
       queueSize: 2,
       partSize: 10 * 1024 * 1024,
@@ -450,6 +453,7 @@ app.put("/upload/:id", async (req, res) => {
       id,
       key: objectKey,
       filename: ticket.filename,
+      contentType: ticket.contentType,
       size: ticket.size,
       batchId: ticket.batchId || null,
       batchStartedAt: ticket.deferQueue
@@ -590,7 +594,7 @@ async function finalizeResumableUpload(ticket) {
       Bucket: bucketName,
       Key: objectKey,
       Body: fs.createReadStream(ticket.partPath),
-      ContentType: "application/pdf"
+      ContentType: ticket.contentType
     },
     queueSize: 2,
     partSize: 10 * 1024 * 1024,
@@ -603,6 +607,7 @@ async function finalizeResumableUpload(ticket) {
     id: ticket.id,
     key: objectKey,
     filename: ticket.filename,
+    contentType: ticket.contentType,
     size: ticket.size,
     batchId: ticket.batchId || null,
     batchStartedAt: ticket.deferQueue
@@ -1586,7 +1591,7 @@ async function ensureKindleFileDetails(page, jobs) {
       console.log("Kindle title input is not available yet", filename);
       continue;
     }
-    const title = filename.replace(/\.pdf$/i, "").slice(0, 200);
+    const title = filename.replace(/\.(?:pdf|epub)$/i, "").slice(0, 200);
     await titleInput.click();
     await titleInput.press("Control+A");
     await titleInput.pressSequentially(title, { delay: 5 });
@@ -1728,7 +1733,7 @@ async function waitForKindleFileReady(page, filename) {
   }
 
   throw new Error(
-    "Amazon did not finish preparing the selected PDF"
+    "Amazon did not finish preparing the selected file"
   );
 }
 
@@ -1782,7 +1787,7 @@ async function waitForKindleFilesReady(page, jobs) {
   }
 
   throw new Error(
-    "Amazon did not finish preparing the selected PDF batch within 20 minutes"
+    "Amazon did not finish preparing the selected file batch within 20 minutes"
   );
 }
 
@@ -1902,7 +1907,7 @@ async function waitForAmazonBatchConfirmation(page, jobs) {
   }
 
   throw new Error(
-    "Amazon did not acknowledge the submitted PDF batch within 15 minutes"
+    "Amazon did not acknowledge the submitted file batch within 15 minutes"
   );
 }
 
@@ -1939,7 +1944,7 @@ async function collectKindleBatchEvidence(page, filenames) {
           return false;
         }
         return expected.some((filename) => text.includes(filename)) ||
-          !/\.pdf\b/i.test(text);
+          !/\.(?:pdf|epub)\b/i.test(text);
       })
       .map((element) => normalize(element.textContent));
 
@@ -2035,7 +2040,7 @@ async function waitForAmazonLibraryConfirmation(
   }
 
   throw new Error(
-    "Amazon did not confirm the PDF as In Library within 15 minutes"
+    "Amazon did not confirm the file as In Library within 15 minutes"
   );
 }
 
@@ -2087,9 +2092,9 @@ async function collectKindleEvidence(page, filename) {
           if (text.length > 2_000) {
             break;
           }
-          const pdfReferences =
-            text.match(/\.pdf\b/gi) || [];
-          if (pdfReferences.length > 1) {
+          const fileReferences =
+            text.match(/\.(?:pdf|epub)\b/gi) || [];
+          if (fileReferences.length > 1) {
             break;
           }
           if (text.includes(expected) && pattern.test(text)) {
@@ -2304,7 +2309,7 @@ async function downloadObject(key, destination) {
     Key: key
   }));
   if (!response.Body) {
-    throw new Error("Stored PDF has no body");
+    throw new Error("Stored Kindle file has no body");
   }
   await pipeline(response.Body, fs.createWriteStream(destination));
 }

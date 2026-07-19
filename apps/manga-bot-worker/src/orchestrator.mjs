@@ -110,21 +110,30 @@ export class Orchestrator {
       });
       await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
 
+      const coverPath = path.join(workDir, "cover.img");
+      await fs.mkdir(workDir, { recursive: true });
+      const cover = await this.mangaApp.downloadCover({
+        coverUrl: series.coverUrl,
+        seriesUrl: job.seriesUrl
+      });
+      await fs.writeFile(coverPath, cover, { mode: 0o600 });
+
       const sourcePdfs = await this.processChapters(job);
       job = this.store.getJob(job.id);
       if (job.status === "cancelled") return;
 
-      job = this.store.updateJob(job.id, { progress: `Собираю итоговые PDF из ${sourcePdfs.length} файлов` });
+      job = this.store.updateJob(job.id, { progress: `Собираю Kindle EPUB из ${sourcePdfs.length} PDF-файлов` });
       await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
       const volumes = await buildKindleVolumesInSubprocess({
         sourcePdfs,
         destinationDir: path.join(workDir, "volumes"),
         baseName: job.seriesTitle,
         maxBytes: this.maxPdfBytes,
-        mergeVerticalPages: job.mergeVerticalPages
+        mergeVerticalPages: job.mergeVerticalPages,
+        coverPath
       });
       if (volumes.some((volume) => volume.oversize)) {
-        throw new Error("Одна PDF-часть превышает безопасный лимит Kindle; требуется разбиение исходной главы");
+        throw new Error("Одна часть превышает безопасный лимит Kindle; требуется разбиение исходной главы");
       }
 
       const queued = [...job.kindleJobs];
@@ -155,9 +164,9 @@ export class Orchestrator {
       job = this.store.updateJob(job.id, {
         status: "delivering",
         kindleJobs: queued,
-        progress: `PDF переданы в Kindle uploader: ${queued.length} шт.`
+        progress: `EPUB переданы в Kindle uploader: ${queued.length} шт.`
       });
-      await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: собрано и поставлено в Kindle-очередь ${queued.length} PDF.`);
+      await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: собрано и поставлено в Kindle-очередь ${queued.length} EPUB.`);
       await this.reconcileDelivery(job);
     } catch (error) {
       const latest = this.store.getJob(initialJob.id);
@@ -238,13 +247,13 @@ export class Orchestrator {
       }
       if (entries.some((entry) => entry.status === "failed")) {
         const failed = entries.find((entry) => entry.status === "failed");
-        this.store.updateJob(job.id, { status: "failed", kindleJobs: entries, error: failed.error || "Amazon rejected a PDF" });
+        this.store.updateJob(job.id, { status: "failed", kindleJobs: entries, error: failed.error || "Amazon rejected an EPUB" });
         await this.telegram.sendMessage(job.chatId, `Kindle не принял ${failed.filename}: ${failed.error || "неизвестная ошибка"}`);
         return;
       }
       if (entries.every((entry) => entry.status === "sent")) {
-        this.store.updateJob(job.id, { status: "completed", kindleJobs: entries, progress: "Amazon принял все PDF к доставке" });
-        await this.telegram.sendMessage(job.chatId, `Готово: Amazon принял ${entries.length} PDF к доставке. Синхронизация с Kindle может занять время.`);
+        this.store.updateJob(job.id, { status: "completed", kindleJobs: entries, progress: "Amazon принял все EPUB к доставке" });
+        await this.telegram.sendMessage(job.chatId, `Готово: Amazon принял ${entries.length} EPUB к доставке. Синхронизация с Kindle может занять время.`);
         return;
       }
       if (entries.some((entry) => entry.status === "waiting_auth")) {
@@ -282,7 +291,7 @@ export class Orchestrator {
         return `• ${entry.filename} — ${entry.size ? formatMegabytes(entry.size) : "размер неизвестен"}, ${entry.status}`;
       }
     }));
-    return `PDF в Kindle:\n${details.join("\n")}`;
+    return `Файлы в Kindle:\n${details.join("\n")}`;
   }
 
   async cancel(chatId) {
@@ -334,7 +343,7 @@ function describeJob(job) {
     job.toChapter ? `До: ${formatToChapter(job.toChapter)}` : null,
     `Merge vertical pages: ${job.mergeVerticalPages ? "вкл" : "выкл"}`,
     job.progress || null,
-    job.kindleJobs?.length ? `PDF в Kindle: ${job.kindleJobs.length}` : null
+    job.kindleJobs?.length ? `Файлы в Kindle: ${job.kindleJobs.length}` : null
   ].filter(Boolean);
   return details.join("\n");
 }

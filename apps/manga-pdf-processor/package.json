@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "bun run index.ts",
-    "check": "node --input-type=module --check < index.ts && node --check pdf-merge-contract.mjs && node --check pdf-utils.mjs && node --check kindle-job-contract.mjs && node --check kindle-upload-contract.mjs && node --check kindle-filename.mjs",
+    "check": "node --input-type=module --check < index.ts && node --check pdf-merge-contract.mjs && node --check pdf-utils.mjs && node --check kindle-job-contract.mjs && node --check kindle-upload-contract.mjs && node --check kindle-filename.mjs && node --check weebcentral-cover.mjs",
     "test": "node --test *.test.mjs"
   },
   "dependencies": {

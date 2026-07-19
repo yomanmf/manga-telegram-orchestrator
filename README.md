@@ -28,6 +28,7 @@ Telegram
   → manga-pdf-processor
   → WeebCentral
   → one-shot PDF assembly subprocess
+  → fixed-layout EPUB packaging with the selected manga cover
   → kindle-uploader
   → Amazon Send to Kindle
 ```
@@ -35,14 +36,28 @@ Telegram
 The web interface remains directly available through `manga-pdf-processor`
 and uses the same Kindle uploader. Browser uploads to the Kindle queue are sent
 in resumable 8 MiB chunks, so a network interruption resumes from the byte
-offset already stored by the uploader instead of restarting a 200 MB PDF.
+offset already stored by the uploader instead of restarting a 200 MB file.
 
-The bot writes chapter PDFs to its per-job temporary workspace. Final Kindle
-volumes are assembled in a one-shot child process, checkpointed once per source
-PDF, and written to disk as soon as each volume closes. This keeps completed
-volume bytes out of the long-lived bot heap. The child process exits after
-assembly so the operating system reclaims `pdf-lib` memory immediately, and
-the complete job workspace is removed after success, cancellation, or failure.
+The bot writes chapter PDFs to its per-job temporary workspace. Kindle volumes
+are assembled in a one-shot child process, checkpointed once per source PDF,
+and written to disk as soon as each volume closes. Each volume is then rendered
+at its native PDF dimensions and packaged as a right-to-left fixed-layout EPUB.
+For every generated file, the worker maps its first included chapter to the
+corresponding manga volume and looks up that volume's English-edition cover.
+The resolver prefers the exact Apple Books artwork requested at up to
+1600x2560, then other publisher/catalog sources, and ranks real image dimensions
+ahead of thumbnail-source priority. Publisher artwork is embedded byte-for-byte
+without labels, cropping, or other visual changes. If chapter-to-volume metadata
+or an English volume cover is not available, the selected title's regular series
+cover is used as the fallback.
+The EPUB sets both EPUB 3 `cover-image` metadata and the legacy Kindle
+`meta name="cover"` entry, because a first PDF page alone is not a reliable
+Kindle library cover. The cover image is intentionally absent from the reading
+spine, so opening the book starts on the first manga page rather than a cover
+page.
+The subprocess exits after packaging so the operating system reclaims PDF and
+image memory immediately, and the complete job workspace is removed after
+success, cancellation, or failure.
 
 ## Local verification
 
@@ -85,8 +100,8 @@ Each application's variables are documented in its `.env.example` file.
 
 Each service is built from its own directory in this monorepo.
 
-The bot caps each generated PDF volume at 150 MB, leaving room below the
-provider's hard upload limit for reliable delivery to Kindle devices.
+The bot caps each intermediate PDF volume at 150 MB, leaving room for EPUB
+packaging below the uploader's 200 MB hard limit.
 
 ## Telegram
 

@@ -8,6 +8,11 @@ import { Orchestrator } from "../src/orchestrator.mjs";
 import { createStore } from "../src/store.mjs";
 import { PDFDocument } from "pdf-lib";
 
+const TEST_COVER = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64"
+);
+
 test("parses Russian Kindle range command", () => {
   assert.deepEqual(parseCommand("Отправь мне на Kindle Fable с главы 201 до самой последней"), {
     type: "send", titleQuery: "Fable", fromChapter: "201", toChapter: "latest"
@@ -113,6 +118,7 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
     async loadSeries() {
       return {
         title: "One Piece (Color)",
+        coverUrl: "https://images.example.test/one-piece.png",
         chapters: [
           { id: "ch-22", title: "Chapter 22" },
           { id: "ch-23", title: "Chapter 23" },
@@ -121,6 +127,7 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
         ]
       };
     },
+    async downloadCover() { return TEST_COVER; },
     async processChapter({ chapterTitle, shouldMerge }) {
       assert.equal(shouldMerge, true);
       processedChapters.push(chapterTitle);
@@ -128,7 +135,8 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
     }
   };
   const kindle = {
-    async enqueueFile(_filePath, _filename, options) {
+    async enqueueFile(_filePath, filename, options) {
+      assert.match(filename, /[.]epub$/);
       enqueueOptions.push(options);
       return { id: "kindle-job-1", status: "queued" };
     },
@@ -156,7 +164,7 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
   assert.equal(failedProgressNotification, true);
   const chapterProgress = messages.filter(({ text }) => / обработано \d+\/\d+ глав\./.test(text));
   assert.deepEqual(chapterProgress.map(({ text }) => text.match(/(\d+\/\d+)/)[1]), ["4/4"]);
-  assert.ok(messages.some(({ text }) => text.includes("Собираю итоговые PDF")));
+  assert.ok(messages.some(({ text }) => text.includes("Собираю Kindle EPUB")));
   assert.ok(messages.some(({ text }) => text.includes("Передаю в Kindle")));
   assert.match(messages.at(-1).text, /Amazon принял/);
   await assert.rejects(fs.access(`${directory}/work/${job.id}`), /ENOENT/);
@@ -177,12 +185,14 @@ test("cleans the job workspace after a processing failure", async () => {
       async loadSeries() {
         return {
           title: "Cleanup",
+          coverUrl: "https://images.example.test/cleanup.png",
           chapters: [
             { id: "one", title: "Chapter 1" },
             { id: "two", title: "Chapter 2" }
           ]
         };
       },
+      async downloadCover() { return TEST_COVER; },
       async processChapter() {
         processed += 1;
         if (processed === 2) throw new Error("processor unavailable");
@@ -221,12 +231,14 @@ test("cleans the job workspace after cancellation during processing", async () =
       async loadSeries() {
         return {
           title: "Cancel",
+          coverUrl: "https://images.example.test/cancel.png",
           chapters: [
             { id: "one", title: "Chapter 1" },
             { id: "two", title: "Chapter 2" }
           ]
         };
       },
+      async downloadCover() { return TEST_COVER; },
       async processChapter() {
         store.cancelLatest("9");
         return [{ name: "chapter.pdf", bytes: pagePdf }];

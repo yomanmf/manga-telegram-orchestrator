@@ -9,6 +9,9 @@ import {
 import {
   normalizeKindlePdfFileName
 } from "./kindle-filename.mjs";
+import {
+  parseWeebCentralCoverUrl
+} from "./weebcentral-cover.mjs";
 
 const app = new Hono();
 
@@ -4681,6 +4684,8 @@ app.get(
       return c.json({
         title:
           series.title,
+        coverUrl:
+          series.coverUrl,
         chapters:
           series.chapters
       });
@@ -5655,6 +5660,10 @@ async function loadWeebCentralSeries(
   return {
     title:
       parseWeebCentralSeriesTitle(
+        seriesHtml
+      ),
+    coverUrl:
+      parseWeebCentralCoverUrl(
         seriesHtml
       ),
     chapters

@@ -28,6 +28,7 @@ export async function buildKindleVolumes({ sourcePdfs, destinationDir, baseName,
   const output = [];
   for (let index = 0; index < volumes.length; index += 1) {
     const volume = volumes[index];
+    const chapterTitles = [...new Set(volume.sources.map((source) => source.chapterTitle).filter(Boolean))];
     const fileName = buildVolumeFileName(baseName, volume.sources, index, volumes.length);
     const filePath = path.join(destinationDir, fileName);
     await fs.rename(volume.temporaryPath, filePath);
@@ -36,7 +37,9 @@ export async function buildKindleVolumes({ sourcePdfs, destinationDir, baseName,
       filePath,
       size: volume.size,
       oversize: Boolean(volume.oversize),
-      sources: volume.sources.map((source) => source.name)
+      sources: volume.sources.map((source) => source.name),
+      firstChapterTitle: chapterTitles[0] || null,
+      lastChapterTitle: chapterTitles.at(-1) || null
     });
   }
   return output;
