@@ -12,6 +12,8 @@ test("serves normalized chapter images for the direct Telegram EPUB path", () =>
 
 test("uses bounded downloads, batched PDF checkpoints, and stored archives", () => {
   assert.match(source, /mapWithConcurrency\(\s*imageUrls,\s*WEEBCENTRAL_IMAGE_CONCURRENCY/);
+  assert.match(source, /fetchWeebCentralImageBytes\(/);
+  assert.match(source, /timeoutMs:\s*WEEBCENTRAL_IMAGE_TIMEOUT_MS/);
   assert.match(source, /writePdfBatches\(\{/);
   assert.match(source, /compression: "STORE"/);
 });

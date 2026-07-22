@@ -19,6 +19,9 @@ import {
 import {
   writePdfBatches
 } from "./pdf-batch-writer.mjs";
+import {
+  fetchWeebCentralImageBytes
+} from "./weebcentral-image-fetch.mjs";
 
 const app = new Hono();
 
@@ -28,6 +31,12 @@ const WEEBCENTRAL_IMAGE_CONCURRENCY =
     process.env.WEEBCENTRAL_IMAGE_CONCURRENCY,
     6,
     { min: 1, max: 16 }
+  );
+const WEEBCENTRAL_IMAGE_TIMEOUT_MS =
+  boundedInteger(
+    process.env.WEEBCENTRAL_IMAGE_TIMEOUT_MS,
+    30_000,
+    { min: 5_000, max: 120_000 }
   );
 const PDF_SERIALIZATION_BATCH_SIZE =
   boundedInteger(
@@ -5940,7 +5949,7 @@ async function downloadWeebCentralChapterImage(
   const pageNumber =
     zeroBasedIndex + 1;
 
-  const response =
+  const result =
     await fetchWeebCentralChapterImage(
       imageUrl,
       chapterId,
@@ -5948,24 +5957,18 @@ async function downloadWeebCentralChapterImage(
     );
 
 
-  if (!response.ok) {
+  if (!result.response.ok) {
     throw new Error(
       "Image " +
       pageNumber +
       " download failed: HTTP " +
-      response.status
+      result.response.status
     );
   }
 
 
-  const buffer =
-    Buffer.from(
-      await response.arrayBuffer()
-    );
-
-
   return normalizeImageForPdf(
-    buffer,
+    result.bytes,
     "page_" +
       String(pageNumber)
         .padStart(4, "0") +
@@ -5983,63 +5986,28 @@ async function fetchWeebCentralChapterImage(
   zeroBasedIndex
 ) {
 
-  let lastError = null;
+  const jitter =
+    (zeroBasedIndex % 6) * 25;
 
-  for (
-    let attempt = 1;
-    attempt <= 3;
-    attempt += 1
-  ) {
-    let response;
-    try {
-      response = await fetch(imageUrl, {
-        headers: {
-          "User-Agent":
-            WEEBCENTRAL_USER_AGENT,
-          "Referer":
-            getWeebCentralChapterUrl(
-              chapterId
-            )
-        }
-      });
-    } catch (error) {
-      lastError = error;
-      if (attempt === 3) throw error;
+  return fetchWeebCentralImageBytes(
+    imageUrl,
+    {
+      headers: {
+        "User-Agent":
+          WEEBCENTRAL_USER_AGENT,
+        "Referer":
+          getWeebCentralChapterUrl(
+            chapterId
+          )
+      },
+      timeoutMs:
+        WEEBCENTRAL_IMAGE_TIMEOUT_MS,
+      retryDelays: [
+        250 + jitter,
+        500 + jitter
+      ]
     }
-
-    if (response) {
-      const retryable =
-        response.status === 429 ||
-        response.status >= 500;
-      if (
-        response.ok ||
-        !retryable ||
-        attempt === 3
-      ) {
-        return response;
-      }
-      await response.body
-        ?.cancel()
-        .catch(function () {});
-    }
-
-    const jitter =
-      (zeroBasedIndex % 6) * 25;
-    await new Promise(
-      function (resolve) {
-        setTimeout(
-          resolve,
-          250 * (2 ** (attempt - 1)) +
-            jitter
-        );
-      }
-    );
-  }
-
-  throw lastError ||
-    new Error(
-      "Image download failed"
-    );
+  );
 
 }
 
