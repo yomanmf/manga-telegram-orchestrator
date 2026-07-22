@@ -92,14 +92,30 @@ export class Orchestrator {
     if (!job || job.chatId !== chatId || job.status !== "waiting_choice" || !choice) {
       return this.telegram.answerCallbackQuery(callback.id, "⏳ Выбор уже недоступен");
     }
+    const choiceMessageId = Number(callback.message?.message_id);
     this.store.updateJob(job.id, {
       status: "queued",
       seriesUrl: choice.url,
       seriesTitle: choice.title,
       choiceManifest: [],
-      progress: `Выбрано: ${choice.title}`
+      progress: `Выбрано: ${choice.title}`,
+      ...(Number.isInteger(choiceMessageId) && choiceMessageId > 0
+        ? { statusMessageId: choiceMessageId }
+        : {})
     });
     await this.telegram.answerCallbackQuery(callback.id, "✅ Выбрано");
+    if (Number.isInteger(choiceMessageId) && choiceMessageId > 0 && typeof this.telegram.editMessage === "function") {
+      try {
+        await this.telegram.editMessage(
+          chatId,
+          choiceMessageId,
+          `✅ Выбрано: ${choice.title}`,
+          { reply_markup: { inline_keyboard: [] } }
+        );
+      } catch (error) {
+        console.error("Cannot replace Telegram choice keyboard with confirmation", error);
+      }
+    }
     await this.sendProgress(job.id, `✅ Скачиваю ${choice.title}: выбор подтверждён, начинаю обработку.`);
   }
 

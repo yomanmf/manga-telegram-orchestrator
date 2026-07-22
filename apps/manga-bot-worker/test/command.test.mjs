@@ -145,6 +145,67 @@ test("edits one Telegram status message and replaces it if editing fails", async
   assert.deepEqual(edited.at(-1), { chatId: "7", messageId: 42, text: "Готово" });
 });
 
+test("confirms a manga choice in its message and removes stale buttons", async () => {
+  const directory = `/tmp/manga-choice-callback-test-${Date.now()}-${Math.random()}`;
+  const store = createStore(directory);
+  const job = store.createJob({
+    chatId: "7",
+    status: "waiting_choice",
+    titleQuery: "20th century boys",
+    choiceManifest: [
+      { title: "20th Century Boys", url: "https://example.test/20th-century-boys" },
+      { title: "21st Century Boys", url: "https://example.test/21st-century-boys" }
+    ]
+  });
+  const answers = [];
+  const edits = [];
+  const progress = [];
+  const orchestrator = new Orchestrator({
+    store,
+    telegram: {
+      async answerCallbackQuery(id, text) { answers.push({ id, text }); },
+      async editMessage(chatId, messageId, text, options) {
+        edits.push({ chatId, messageId, text, options });
+      },
+      async sendMessage(chatId, text) {
+        progress.push({ chatId, text });
+        return { message_id: 100 };
+      }
+    },
+    mangaApp: {},
+    kindle: {},
+    maxPdfBytes: 10_000_000
+  });
+
+  await orchestrator.handleCallback({
+    id: "callback-1",
+    data: `choose:${job.id}:0`,
+    message: { message_id: 55, chat: { id: 7 } }
+  });
+
+  const updated = store.getJob(job.id);
+  assert.equal(updated.status, "queued");
+  assert.equal(updated.seriesTitle, "20th Century Boys");
+  assert.equal(updated.statusMessageId, 55);
+  assert.deepEqual(updated.choiceManifest, []);
+  assert.deepEqual(answers, [{ id: "callback-1", text: "✅ Выбрано" }]);
+  assert.deepEqual(edits, [
+    {
+      chatId: "7",
+      messageId: 55,
+      text: "✅ Выбрано: 20th Century Boys",
+      options: { reply_markup: { inline_keyboard: [] } }
+    },
+    {
+      chatId: "7",
+      messageId: 55,
+      text: "✅ Скачиваю 20th Century Boys: выбор подтверждён, начинаю обработку.",
+      options: undefined
+    }
+  ]);
+  assert.deepEqual(progress, []);
+});
+
 test("processes chapters concurrently while retaining chapter order", async () => {
   const directory = `/tmp/manga-chapter-concurrency-test-${Date.now()}-${Math.random()}`;
   const store = createStore(directory);
