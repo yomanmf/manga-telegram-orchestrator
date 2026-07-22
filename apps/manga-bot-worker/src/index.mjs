@@ -9,6 +9,7 @@ import { isOwnerPrivateUpdate } from "./telegram-auth.mjs";
 
 const DEFAULT_MAX_PDF_BYTES = 150_000_000;
 const MAX_ALLOWED_PDF_BYTES = 150_000_000;
+let shuttingDown = false;
 
 const config = readConfig(process.env);
 const missingConfiguration = requiredNames(config);
@@ -28,7 +29,13 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, configured: ready, missing: missingConfiguration, service: "manga-telegram-orchestrator" });
+  res.json({
+    ok: true,
+    configured: ready,
+    missing: missingConfiguration,
+    telegramUpdateMode: config.telegramUpdateMode,
+    service: "manga-telegram-orchestrator"
+  });
 });
 
 app.post("/telegram/webhook", async (req, res) => {
@@ -85,13 +92,20 @@ const server = app.listen(config.port, () => {
   if (ready) {
     orchestrator.start();
     configureTelegramMenu().catch((error) => console.error("Telegram menu setup failed", error));
-    configureWebhook().catch((error) => console.error("Telegram webhook setup failed", error));
+    if (config.telegramUpdateMode === "polling") {
+      pollTelegram().catch((error) => console.error("Telegram polling stopped", error));
+    } else {
+      configureWebhook().catch((error) => console.error("Telegram webhook setup failed", error));
+    }
   }
   else console.warn(`Setup required. Missing: ${missingConfiguration.join(", ")}`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.on(signal, () => server.close(() => process.exit(0)));
+  process.on(signal, () => {
+    shuttingDown = true;
+    server.close(() => process.exit(0));
+  });
 }
 
 function readConfig(env) {
@@ -99,6 +113,7 @@ function readConfig(env) {
     port: Number(env.PORT || 3000),
     dataDir: env.DATA_DIR || "/data",
     telegramToken: optional(env, "TELEGRAM_BOT_TOKEN"),
+    telegramUpdateMode: String(env.TELEGRAM_UPDATE_MODE || "polling").trim().toLowerCase(),
     webhookSecret: optional(env, "TELEGRAM_WEBHOOK_SECRET"),
     ownerUserId: optional(env, "TELEGRAM_OWNER_USER_ID") || optional(env, "TELEGRAM_ALLOWED_CHAT_ID"),
     mangaAppUrl: optional(env, "MANGA_APP_URL"),
@@ -114,6 +129,9 @@ function readConfig(env) {
   }
   if (config.ownerUserId && (!/^\d+$/.test(config.ownerUserId) || !Number.isSafeInteger(Number(config.ownerUserId)) || Number(config.ownerUserId) <= 0)) {
     throw new Error("TELEGRAM_OWNER_USER_ID must be a positive Telegram user id");
+  }
+  if (!["polling", "webhook"].includes(config.telegramUpdateMode)) {
+    throw new Error("TELEGRAM_UPDATE_MODE must be polling or webhook");
   }
   return config;
 }
@@ -142,6 +160,35 @@ async function configureWebhook() {
   }
   const result = await telegram.setWebhook(`${config.publicBaseUrl}/telegram/webhook`, config.webhookSecret);
   console.log(`Telegram webhook configured: ${result.description || "ok"}`);
+}
+
+async function pollTelegram() {
+  await telegram.deleteWebhook();
+  console.log("Telegram long polling configured");
+  let offset = 0;
+  while (!shuttingDown) {
+    try {
+      const updates = await telegram.getUpdates(offset, 25);
+      for (const update of updates) {
+        offset = Math.max(offset, Number(update.update_id) + 1);
+        if (!isOwnerPrivateUpdate(update, config.ownerUserId)) {
+          console.warn("Rejected Telegram update from unauthorized sender or non-private chat");
+          continue;
+        }
+        if (!store.rememberUpdate(update.update_id)) continue;
+        try {
+          if (update.message) await orchestrator.handleMessage(update.message);
+          if (update.callback_query) await orchestrator.handleCallback(update.callback_query);
+        } catch (error) {
+          console.error("Telegram update failed", error);
+        }
+      }
+    } catch (error) {
+      if (shuttingDown) return;
+      console.error("Telegram polling request failed", error);
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  }
 }
 
 async function configureTelegramMenu() {

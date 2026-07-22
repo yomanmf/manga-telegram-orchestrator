@@ -55,3 +55,41 @@ test("retries a transient Telegram fetch failure", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("switches from webhook delivery to long polling without dropping updates", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url: String(url), body: JSON.parse(options.body) });
+    const result = String(url).endsWith("/getUpdates")
+      ? [{ update_id: 42, message: { text: "/status" } }]
+      : true;
+    return new Response(JSON.stringify({ ok: true, result }), {
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  try {
+    const telegram = createTelegram("test-token");
+    await telegram.deleteWebhook();
+    const updates = await telegram.getUpdates(40, 25);
+    assert.equal(updates[0].update_id, 42);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(calls, [
+    {
+      url: "https://api.telegram.org/bottest-token/deleteWebhook",
+      body: { drop_pending_updates: false }
+    },
+    {
+      url: "https://api.telegram.org/bottest-token/getUpdates",
+      body: {
+        offset: 40,
+        timeout: 25,
+        allowed_updates: ["message", "callback_query"]
+      }
+    }
+  ]);
+});

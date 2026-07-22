@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fcntl
+import ipaddress
 import json
 import os
 import re
@@ -40,6 +41,7 @@ class Config:
     state_dir: Path
     project_name: str = "deploy"
     candidate_tag: str = "candidate"
+    telegram_api_ip: str = ""
     stable_seconds: int = 8
     poll_seconds: int = 8
 
@@ -69,6 +71,14 @@ class Config:
         state_dir = Path(values["STATE_DIR"])
         if not compose_path.is_absolute() or not state_dir.is_absolute():
             raise DeployError("Configured paths must be absolute", "INVALID_CONFIG")
+        telegram_api_ip = values.get("TELEGRAM_API_IP", "")
+        if telegram_api_ip:
+            try:
+                address = ipaddress.ip_address(telegram_api_ip)
+            except ValueError as exc:
+                raise DeployError("TELEGRAM_API_IP must be an IPv4 address", "INVALID_CONFIG") from exc
+            if address.version != 4:
+                raise DeployError("TELEGRAM_API_IP must be an IPv4 address", "INVALID_CONFIG")
         return cls(
             registry_host=values["REGISTRY_HOST"],
             registry_id=values["REGISTRY_ID"],
@@ -77,6 +87,7 @@ class Config:
             state_dir=state_dir,
             project_name=values.get("PROJECT_NAME", "deploy"),
             candidate_tag=values.get("CANDIDATE_TAG", "candidate"),
+            telegram_api_ip=telegram_api_ip,
             stable_seconds=int(values.get("STABLE_SECONDS", "8")),
             poll_seconds=int(values.get("POLL_SECONDS", "8")),
         )
@@ -270,11 +281,13 @@ class Docker:
 
     def rollout(self, service: str, image: str) -> None:
         override = self.runtime / f"{service}.yaml"
-        override.write_text(
-            "services:\n"
-            f"  {service}:\n"
-            f"    image: {image}\n"
-        )
+        lines = ["services:", f"  {service}:", f"    image: {image}"]
+        if service == "manga-bot-worker" and self.config.telegram_api_ip:
+            lines.extend([
+                "    extra_hosts:",
+                f'      - "api.telegram.org:{self.config.telegram_api_ip}"',
+            ])
+        override.write_text("\n".join(lines) + "\n")
         command(
             [
                 "docker",

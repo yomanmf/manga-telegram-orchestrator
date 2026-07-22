@@ -106,10 +106,19 @@ The VM deploy agent applies a Compose image override one service at a time,
 checks local HTTP readiness, rolls back to the previous image on failure, and
 writes a sanitized terminal result to the serial console for CI.
 
+The deploy agent can set `TELEGRAM_API_IP` to an official Telegram Bot API IPv4
+address when the address returned by cloud DNS is unreachable from the VM. The
+override is applied only to `manga-bot-worker`; the bot token still goes directly
+to Telegram and never passes through a third-party proxy.
+
 The bot caps each intermediate PDF volume at 150 MB, leaving room for EPUB
 packaging below the uploader's 200 MB hard limit.
 
 ## Telegram
+
+Production uses Telegram long polling by default because Telegram cannot reach
+the Yandex Cloud public webhook route reliably. Set `TELEGRAM_UPDATE_MODE=webhook`
+only in a network where Telegram can connect to `PUBLIC_BASE_URL`.
 
 Set `TELEGRAM_OWNER_USER_ID` to the owner's numeric Telegram user ID. The bot
 accepts messages and button callbacks only from that user in the user's private

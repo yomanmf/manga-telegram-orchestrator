@@ -79,6 +79,16 @@ export function createTelegram(token, { retryDelays = [250, 1_000] } = {}) {
         drop_pending_updates: false
       });
     },
+    deleteWebhook() {
+      return call("deleteWebhook", { drop_pending_updates: false });
+    },
+    getUpdates(offset = 0, timeout = 25) {
+      return call("getUpdates", {
+        offset,
+        timeout,
+        allowed_updates: ["message", "callback_query"]
+      });
+    },
     async configureMenu() {
       await call("setMyCommands", { commands: MENU_COMMANDS });
       return call("setChatMenuButton", {
