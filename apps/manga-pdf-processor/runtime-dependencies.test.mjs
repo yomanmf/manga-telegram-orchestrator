@@ -6,6 +6,7 @@ const packageJson = JSON.parse(
   await readFile(new URL("./package.json", import.meta.url), "utf8")
 );
 const source = await readFile(new URL("./index.ts", import.meta.url), "utf8");
+const dockerfile = await readFile(new URL("./Dockerfile", import.meta.url), "utf8");
 
 test("declares every external runtime import as a production dependency", () => {
   const imports = new Set();
@@ -46,4 +47,19 @@ test("sharp loads and performs native image processing", async () => {
   }).png().toBuffer();
 
   assert.ok(bytes.length > 0);
+});
+
+test("copies every local runtime module into the container image", () => {
+  const localImports = Array.from(
+    source.matchAll(/\bfrom\s+["'][.]\/([^"']+)["']/g),
+    (match) => match[1]
+  );
+
+  for (const moduleName of localImports) {
+    assert.match(
+      dockerfile,
+      new RegExp(`\\b${moduleName.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\b`),
+      `${moduleName} is imported by index.ts but missing from the Dockerfile`
+    );
+  }
 });
