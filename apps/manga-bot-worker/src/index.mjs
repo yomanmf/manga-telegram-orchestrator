@@ -2,6 +2,7 @@ import express from "express";
 import path from "node:path";
 
 import { registerAnalyticsRoutes } from "./analytics.mjs";
+import { loadAnalyticsLockbox } from "./analytics-lockbox.mjs";
 import { boundedInteger } from "./concurrency.mjs";
 import { createKindleClient } from "./kindle-client.mjs";
 import { createMangaAppClient } from "./manga-app.mjs";
@@ -14,6 +15,7 @@ const DEFAULT_MAX_PDF_BYTES = 150_000_000;
 const MAX_ALLOWED_PDF_BYTES = 150_000_000;
 let shuttingDown = false;
 
+await loadAnalyticsLockbox();
 const config = readConfig(process.env);
 const missingConfiguration = requiredNames(config);
 const ready = missingConfiguration.length === 0;
