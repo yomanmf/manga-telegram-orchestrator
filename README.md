@@ -27,7 +27,8 @@ Telegram
   → manga-bot-worker
   → manga-pdf-processor
   → WeebCentral
-  → one-shot PDF assembly subprocess
+  → normalized chapter images
+  → one-shot image layout subprocess
   → fixed-layout EPUB packaging with the selected manga cover
   → kindle-uploader
   → Amazon Send to Kindle
@@ -38,10 +39,17 @@ and uses the same Kindle uploader. Browser uploads to the Kindle queue are sent
 in resumable 8 MiB chunks, so a network interruption resumes from the byte
 offset already stored by the uploader instead of restarting a 200 MB file.
 
-The bot writes chapter PDFs to its per-job temporary workspace. Kindle volumes
-are assembled in a one-shot child process, checkpointed once per source PDF,
-and written to disk as soon as each volume closes. Each volume is then rendered
-at its native PDF dimensions and packaged as a right-to-left fixed-layout EPUB.
+The Telegram path writes normalized chapter images to its per-job temporary
+workspace and creates right-to-left spreads directly with Sharp. It packages
+those JPEG pages into fixed-layout EPUB volumes without first creating and then
+re-rendering intermediate PDFs. The legacy PDF/CBZ web interface remains
+available and uses batched PDF checkpoints for compatibility.
+The processor downloads up to six chapter images concurrently and commits PDF
+operations in batches instead of serializing the growing document after every
+page. The bot processes two chapters concurrently, and split EPUB volumes are
+rendered in a pool of two workers. All pools preserve source order and stop
+scheduling new work after an error. Internal ZIP responses use `STORE` because
+their PDF and image payloads are already compressed.
 For every generated file, the worker maps its first included chapter to the
 corresponding manga volume and looks up that volume's English-edition cover.
 The resolver prefers the exact Apple Books artwork requested at up to
@@ -80,7 +88,7 @@ Storage bucket, and two persistent disks:
 - the `manga-bot-worker` volume stores SQLite data at `/data`;
 - the `kindle-uploader` volume stores the Amazon browser profile and queue at
   `/data`;
-- the `kindle-pdf-queue` Object Storage bucket temporarily stores PDFs between
+- the `kindle-pdf-queue` Object Storage bucket temporarily stores books between
   services through its S3-compatible API.
 
 Each Telegram request gets its own Kindle batch. The worker first stages all of
@@ -97,6 +105,11 @@ token, webhook secret, web application password and session token, Kindle
 shared secret, and Object Storage credentials.
 
 Each application's variables are documented in its `.env.example` file.
+The performance defaults can be tuned with
+`WEEBCENTRAL_IMAGE_CONCURRENCY`, `PDF_SERIALIZATION_BATCH_SIZE`,
+`CHAPTER_PROCESSING_CONCURRENCY`, `EPUB_BUILD_CONCURRENCY`, and
+`KINDLE_UPLOAD_CONCURRENCY`. Increase them only after checking container memory
+and upstream throttling; the checked-in defaults are deliberately bounded.
 
 Each service is built from its own directory in this monorepo.
 
@@ -111,8 +124,8 @@ address when the address returned by cloud DNS is unreachable from the VM. The
 override is applied only to `manga-bot-worker`; the bot token still goes directly
 to Telegram and never passes through a third-party proxy.
 
-The bot caps each intermediate PDF volume at 150 MB, leaving room for EPUB
-packaging below the uploader's 200 MB hard limit.
+The bot starts a new EPUB volume after 150 MB of rendered page assets, leaving
+room for its cover and package metadata below the uploader's 200 MB hard limit.
 
 ## Telegram
 

@@ -6,12 +6,21 @@ import { parseCommand } from "../src/command.mjs";
 import { selectChapterRange } from "../src/chapters.mjs";
 import { Orchestrator } from "../src/orchestrator.mjs";
 import { createStore } from "../src/store.mjs";
-import { PDFDocument } from "pdf-lib";
 
 const TEST_COVER = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64"
 );
+
+function testImagePage() {
+  return [{
+    fileName: "pages/page_0001.png",
+    bytes: TEST_COVER,
+    width: 1,
+    height: 1,
+    format: "png"
+  }];
+}
 
 test("parses Russian Kindle range command", () => {
   assert.deepEqual(parseCommand("Отправь мне на Kindle Fable с главы 201 до самой последней"), {
@@ -91,12 +100,102 @@ test("deduplicates Telegram updates and persists jobs", () => {
   assert.equal(store.getMergeVerticalPages("7"), false);
 });
 
-test("runs a Telegram request through PDF assembly and Kindle confirmation", async () => {
+test("processes chapters concurrently while retaining chapter order", async () => {
+  const directory = `/tmp/manga-chapter-concurrency-test-${Date.now()}-${Math.random()}`;
+  const store = createStore(directory);
+  const chapters = [
+    { id: "one", title: "Chapter 1", delay: 30 },
+    { id: "two", title: "Chapter 2", delay: 5 },
+    { id: "three", title: "Chapter 3", delay: 20 },
+    { id: "four", title: "Chapter 4", delay: 1 }
+  ];
+  const job = store.createJob({
+    chatId: "concurrency",
+    status: "processing",
+    titleQuery: "Concurrent Manga",
+    seriesTitle: "Concurrent Manga",
+    chapterManifest: chapters
+  });
+  let active = 0;
+  let peak = 0;
+  const orchestrator = new Orchestrator({
+    store,
+    telegram: { async sendMessage() {}, async answerCallbackQuery() {} },
+    mangaApp: {
+      async processChapterImages({ chapterId }) {
+        const chapter = chapters.find((item) => item.id === chapterId);
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, chapter.delay));
+        active -= 1;
+        return testImagePage();
+      }
+    },
+    kindle: {},
+    maxPdfBytes: 10_000_000,
+    chapterProcessingConcurrency: 2,
+    tempRoot: `${directory}/work`
+  });
+
+  const sources = await orchestrator.processChapters(job);
+
+  assert.equal(peak, 2);
+  assert.deepEqual(
+    sources.map((source) => source.chapterTitle),
+    chapters.map((chapter) => chapter.title)
+  );
+  assert.match(store.getJob(job.id).progress, /^Обработано 4\/4:/);
+});
+
+test("stages Kindle volumes concurrently and persists them in source order", async () => {
+  const directory = `/tmp/manga-upload-concurrency-test-${Date.now()}-${Math.random()}`;
+  const store = createStore(directory);
+  const job = store.createJob({
+    chatId: "uploads",
+    status: "processing",
+    titleQuery: "Uploads"
+  });
+  const volumes = [30, 5, 20, 1].map((delay, index) => ({
+    fileName: `volume-${index + 1}.epub`,
+    filePath: `/volume-${index + 1}.epub`,
+    delay
+  }));
+  let active = 0;
+  let peak = 0;
+  const orchestrator = new Orchestrator({
+    store,
+    telegram: { async sendMessage() {}, async answerCallbackQuery() {} },
+    mangaApp: {},
+    kindle: {
+      async enqueueFile(_filePath, filename, options) {
+        const volume = volumes.find((item) => item.fileName === filename);
+        assert.deepEqual(options, { batchId: job.id, deferStart: true });
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, volume.delay));
+        active -= 1;
+        return { id: `kindle-${filename}`, filename, size: 100, status: "queued" };
+      }
+    },
+    maxPdfBytes: 10_000_000,
+    kindleUploadConcurrency: 2
+  });
+
+  const queued = await orchestrator.enqueueVolumes(job, volumes);
+
+  assert.equal(peak, 2);
+  assert.deepEqual(
+    queued.map((item) => item.filename),
+    volumes.map((volume) => volume.fileName)
+  );
+  assert.deepEqual(
+    store.getJob(job.id).kindleJobs.map((item) => item.filename),
+    volumes.map((volume) => volume.fileName)
+  );
+});
+
+test("runs a Telegram request through direct image EPUB assembly and Kindle confirmation", async () => {
   const directory = `/tmp/manga-orchestrator-test-${Date.now()}-${Math.random()}`;
-  const pdf = await PDFDocument.create();
-  const page = pdf.addPage([300, 400]);
-  page.drawRectangle({ x: 0, y: 0, width: 1, height: 1 });
-  const pagePdf = Buffer.from(await pdf.save());
   const messages = [];
   const processedChapters = [];
   const enqueueOptions = [];
@@ -128,10 +227,9 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
       };
     },
     async downloadCover() { return TEST_COVER; },
-    async processChapter({ chapterTitle, shouldMerge }) {
-      assert.equal(shouldMerge, true);
+    async processChapterImages({ chapterTitle }) {
       processedChapters.push(chapterTitle);
-      return [{ name: "chapter.pdf", bytes: pagePdf }];
+      return testImagePage();
     }
   };
   const kindle = {
@@ -172,9 +270,6 @@ test("runs a Telegram request through PDF assembly and Kindle confirmation", asy
 
 test("cleans the job workspace after a processing failure", async () => {
   const directory = `/tmp/manga-orchestrator-cleanup-test-${Date.now()}-${Math.random()}`;
-  const pdf = await PDFDocument.create();
-  pdf.addPage([300, 400]).drawRectangle({ x: 0, y: 0, width: 1, height: 1 });
-  const pagePdf = Buffer.from(await pdf.save());
   const store = createStore(directory);
   let processed = 0;
   const orchestrator = new Orchestrator({
@@ -193,10 +288,10 @@ test("cleans the job workspace after a processing failure", async () => {
         };
       },
       async downloadCover() { return TEST_COVER; },
-      async processChapter() {
+      async processChapterImages() {
         processed += 1;
         if (processed === 2) throw new Error("processor unavailable");
-        return [{ name: "chapter.pdf", bytes: pagePdf }];
+        return testImagePage();
       }
     },
     kindle: {
@@ -219,9 +314,6 @@ test("cleans the job workspace after a processing failure", async () => {
 
 test("cleans the job workspace after cancellation during processing", async () => {
   const directory = `/tmp/manga-orchestrator-cancel-test-${Date.now()}-${Math.random()}`;
-  const pdf = await PDFDocument.create();
-  pdf.addPage([300, 400]).drawRectangle({ x: 0, y: 0, width: 1, height: 1 });
-  const pagePdf = Buffer.from(await pdf.save());
   const store = createStore(directory);
   const orchestrator = new Orchestrator({
     store,
@@ -239,9 +331,9 @@ test("cleans the job workspace after cancellation during processing", async () =
         };
       },
       async downloadCover() { return TEST_COVER; },
-      async processChapter() {
+      async processChapterImages() {
         store.cancelLatest("9");
-        return [{ name: "chapter.pdf", bytes: pagePdf }];
+        return testImagePage();
       }
     },
     kindle: {

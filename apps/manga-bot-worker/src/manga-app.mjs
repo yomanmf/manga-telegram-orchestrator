@@ -1,5 +1,7 @@
 import JSZip from "jszip";
 
+import { extractChapterImages } from "./chapter-images.mjs";
+
 const MAX_COVER_BYTES = 12 * 1024 * 1024;
 
 function assertRemoteCoverUrl(value) {
@@ -75,6 +77,35 @@ export function createMangaAppClient({ baseUrl, sessionToken }) {
     return data;
   }
 
+  async function processChapterArchive({
+    chapterId,
+    mangaTitle,
+    chapterTitle,
+    shouldMerge,
+    outputFormat
+  }) {
+    const response = await fetch(`${url}/weebcentral/chapter`, {
+      method: "POST",
+      headers: {
+        Cookie: cookie,
+        Accept: "application/zip",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        chapterId,
+        mangaTitle,
+        chapterTitle,
+        shouldMerge,
+        outputFormat
+      })
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || `Chapter processing failed (${response.status})`);
+    }
+    return JSZip.loadAsync(await response.arrayBuffer());
+  }
+
   return {
     search(query) {
       return json(`/weebcentral/search?q=${encodeURIComponent(query)}`);
@@ -86,20 +117,13 @@ export function createMangaAppClient({ baseUrl, sessionToken }) {
       return fetchCover(coverUrl, seriesUrl);
     },
     async processChapter({ chapterId, mangaTitle, chapterTitle, shouldMerge = true }) {
-      const response = await fetch(`${url}/weebcentral/chapter`, {
-        method: "POST",
-        headers: {
-          Cookie: cookie,
-          Accept: "application/zip",
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ chapterId, mangaTitle, chapterTitle, shouldMerge })
+      const zip = await processChapterArchive({
+        chapterId,
+        mangaTitle,
+        chapterTitle,
+        shouldMerge,
+        outputFormat: "pdf"
       });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || `Chapter processing failed (${response.status})`);
-      }
-      const zip = await JSZip.loadAsync(await response.arrayBuffer());
       const files = [];
       for (const [name, entry] of Object.entries(zip.files)) {
         if (!entry.dir && /\.pdf$/i.test(name)) {
@@ -108,6 +132,16 @@ export function createMangaAppClient({ baseUrl, sessionToken }) {
       }
       if (files.length === 0) throw new Error("The manga processor returned no PDF files");
       return files;
+    },
+    async processChapterImages({ chapterId, mangaTitle, chapterTitle }) {
+      const zip = await processChapterArchive({
+        chapterId,
+        mangaTitle,
+        chapterTitle,
+        shouldMerge: false,
+        outputFormat: "images"
+      });
+      return extractChapterImages(zip);
     }
   };
 }

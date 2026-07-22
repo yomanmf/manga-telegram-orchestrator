@@ -9,6 +9,7 @@ RUN apt-get update \
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
+RUN node -e 'import("sharp").then(async ({ default: sharp }) => sharp({ create: { width: 1, height: 1, channels: 3, background: "#fff" } }).jpeg().toBuffer())'
 
 COPY src ./src
 COPY test ./test

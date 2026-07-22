@@ -18,7 +18,9 @@ const CRC_TABLE = Array.from({ length: 256 }, (_unused, value) => {
 
 function crc32(data) {
   let crc = 0xffffffff;
-  for (const byte of data) crc = (CRC_TABLE[(crc ^ byte) & 0xff] ?? 0) ^ (crc >>> 8);
+  for (let index = 0; index < data.length; index += 1) {
+    crc = (CRC_TABLE[(crc ^ data[index]) & 0xff] ?? 0) ^ (crc >>> 8);
+  }
   return (crc ^ 0xffffffff) >>> 0;
 }
 
@@ -252,14 +254,28 @@ async function renderPdfPages(pdfPath, destinationDir) {
   return files.map((name) => path.join(destinationDir, name));
 }
 
-export async function buildFixedLayoutMangaEpub({ outputPath, title, coverPath, pagePaths, modifiedDate = new Date().toISOString().slice(0, 10) }) {
+export async function buildFixedLayoutMangaEpub({
+  outputPath,
+  title,
+  coverPath,
+  pagePaths,
+  pageInfos = null,
+  modifiedDate = new Date().toISOString().slice(0, 10)
+}) {
   if (!Array.isArray(pagePaths) || pagePaths.length === 0) throw new Error("Cannot create an empty manga EPUB");
   const coverBytes = await fs.readFile(coverPath);
   const cover = imageInfo(coverBytes);
   const pages = [];
-  for (const pagePath of pagePaths) {
-    const info = imageInfo(await fs.readFile(pagePath));
+  if (pageInfos && pageInfos.length !== pagePaths.length) {
+    throw new Error("Manga EPUB page metadata does not match the page list");
+  }
+  for (let index = 0; index < pagePaths.length; index += 1) {
+    const pagePath = pagePaths[index];
+    const info = pageInfos?.[index] || imageInfo(await fs.readFile(pagePath));
     if (info.mediaType !== "image/jpeg") throw new Error("Rendered manga pages must be JPEG images");
+    if (!Number.isSafeInteger(info.width) || !Number.isSafeInteger(info.height) || info.width <= 0 || info.height <= 0) {
+      throw new Error("Rendered manga page dimensions are invalid");
+    }
     pages.push({ path: pagePath, ...info });
   }
   const identifier = `urn:uuid:${crypto.randomUUID()}`;

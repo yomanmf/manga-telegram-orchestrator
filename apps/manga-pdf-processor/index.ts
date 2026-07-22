@@ -12,10 +12,29 @@ import {
 import {
   parseWeebCentralCoverUrl
 } from "./weebcentral-cover.mjs";
+import {
+  boundedInteger,
+  mapWithConcurrency
+} from "./processing-performance.mjs";
+import {
+  writePdfBatches
+} from "./pdf-batch-writer.mjs";
 
 const app = new Hono();
 
 const MAX_PDF_SIZE = 185 * 1024 * 1024;
+const WEEBCENTRAL_IMAGE_CONCURRENCY =
+  boundedInteger(
+    process.env.WEEBCENTRAL_IMAGE_CONCURRENCY,
+    6,
+    { min: 1, max: 16 }
+  );
+const PDF_SERIALIZATION_BATCH_SIZE =
+  boundedInteger(
+    process.env.PDF_SERIALIZATION_BATCH_SIZE,
+    24,
+    { min: 1, max: 64 }
+  );
 
 const htmlContent = `<!DOCTYPE html>
 <html lang="ru">
@@ -4844,6 +4863,23 @@ async function processWeebCentralChapterArchive(
   const session =
     createZipSession();
 
+  if (
+    input.outputFormat === "images"
+  ) {
+    writeChapterImagesToZip(
+      images,
+      session
+    );
+
+    return {
+      archiveData:
+        await generateZipArchive(
+          session
+        ),
+      outputCount: images.length
+    };
+  }
+
   const outputCount =
     await writeOperationsToZip({
       operations:
@@ -4903,6 +4939,21 @@ function getWeebCentralChapterArchiveInput(
 
   }
 
+  const outputFormat =
+    String(
+      body.outputFormat || "pdf"
+    ).toLowerCase();
+
+  if (
+    outputFormat !== "pdf" &&
+    outputFormat !== "images"
+  ) {
+    throw createRouteError(
+      "Invalid chapter output format",
+      400
+    );
+  }
+
 
   return {
     chapterId,
@@ -4915,9 +4966,53 @@ function getWeebCentralChapterArchiveInput(
         body.chapterTitle ||
         "Chapter"
       ),
+    outputFormat,
     shouldMerge:
       body.shouldMerge !== false
   };
+
+}
+
+
+function writeChapterImagesToZip(
+  images,
+  session
+) {
+
+  const pages =
+    images.map(
+      function (image, index) {
+        const extension =
+          image.format === "jpg"
+            ? "jpg"
+            : "png";
+        const fileName =
+          "pages/page_" +
+          String(index + 1)
+            .padStart(4, "0") +
+          "." + extension;
+
+        session.zip.file(
+          fileName,
+          image.bytes
+        );
+
+        return {
+          fileName,
+          width: image.width,
+          height: image.height,
+          format: image.format
+        };
+      }
+    );
+
+  session.zip.file(
+    "manifest.json",
+    JSON.stringify({
+      version: 1,
+      pages
+    })
+  );
 
 }
 
@@ -5072,10 +5167,7 @@ async function generateZipArchive(
 
   return session.zip.generateAsync({
     type: "arraybuffer",
-    compression: "DEFLATE",
-    compressionOptions: {
-      level: 6
-    }
+    compression: "STORE"
   });
 
 }
@@ -5749,27 +5841,17 @@ async function downloadWeebCentralChapterImages(
       chapterId
     );
 
-  const images = [];
-
-
-  for (
-    let i = 0;
-    i < imageUrls.length;
-    i++
-  ) {
-
-    images.push(
-      await downloadWeebCentralChapterImage(
-        imageUrls[i],
+  return mapWithConcurrency(
+    imageUrls,
+    WEEBCENTRAL_IMAGE_CONCURRENCY,
+    function (imageUrl, index) {
+      return downloadWeebCentralChapterImage(
+        imageUrl,
         chapterId,
-        i
-      )
-    );
-
-  }
-
-
-  return images;
+        index
+      );
+    }
+  );
 
 }
 
@@ -5859,16 +5941,11 @@ async function downloadWeebCentralChapterImage(
     zeroBasedIndex + 1;
 
   const response =
-    await fetch(imageUrl, {
-      headers: {
-        "User-Agent":
-          WEEBCENTRAL_USER_AGENT,
-        "Referer":
-          getWeebCentralChapterUrl(
-            chapterId
-          )
-      }
-    });
+    await fetchWeebCentralChapterImage(
+      imageUrl,
+      chapterId,
+      zeroBasedIndex
+    );
 
 
   if (!response.ok) {
@@ -5896,6 +5973,73 @@ async function downloadWeebCentralChapterImage(
         imageUrl
       )
   );
+
+}
+
+
+async function fetchWeebCentralChapterImage(
+  imageUrl,
+  chapterId,
+  zeroBasedIndex
+) {
+
+  let lastError = null;
+
+  for (
+    let attempt = 1;
+    attempt <= 3;
+    attempt += 1
+  ) {
+    let response;
+    try {
+      response = await fetch(imageUrl, {
+        headers: {
+          "User-Agent":
+            WEEBCENTRAL_USER_AGENT,
+          "Referer":
+            getWeebCentralChapterUrl(
+              chapterId
+            )
+        }
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt === 3) throw error;
+    }
+
+    if (response) {
+      const retryable =
+        response.status === 429 ||
+        response.status >= 500;
+      if (
+        response.ok ||
+        !retryable ||
+        attempt === 3
+      ) {
+        return response;
+      }
+      await response.body
+        ?.cancel()
+        .catch(function () {});
+    }
+
+    const jitter =
+      (zeroBasedIndex % 6) * 25;
+    await new Promise(
+      function (resolve) {
+        setTimeout(
+          resolve,
+          250 * (2 ** (attempt - 1)) +
+            jitter
+        );
+      }
+    );
+  }
+
+  throw lastError ||
+    new Error(
+      "Image download failed"
+    );
 
 }
 
@@ -6492,190 +6636,21 @@ async function writeOperationsToZip({
   session,
   addOperation
 }) {
-
-  let currentPdf =
-    await PDFDocument.create();
-
-
-  let currentBytes = null;
-
-  let operationCount = 0;
-
-  let outputIndex = 1;
-
-  let outputCount = 0;
-
-
-  for (
-    const operation of operations
-  ) {
-
-    /*
-      Сначала добавляем операцию
-      в текущий PDF.
-    */
-
-    await addOperation(
-      currentPdf,
-      operation
-    );
-
-
-    const candidateBytes =
-      await currentPdf.save({
-        useObjectStreams: true
-      });
-
-
-    /*
-      Если PDF превысил лимит,
-      а до текущей операции
-      уже были страницы:
-
-      1. сохраняем предыдущую версию;
-      2. создаем новый PDF;
-      3. повторно добавляем текущую операцию.
-
-      Таким образом текущая страница
-      НЕ теряется.
-    */
-
-    if (
-      candidateBytes.length >
-        MAX_PDF_SIZE &&
-      operationCount > 0 &&
-      currentBytes
-    ) {
-
+  return writePdfBatches({
+    operations,
+    maxBytes: MAX_PDF_SIZE,
+    batchSize:
+      PDF_SERIALIZATION_BATCH_SIZE,
+    addOperation,
+    emitPdf(bytes, outputIndex) {
       addPdfBytesToSessionZip(
         session,
         baseFileName,
         outputIndex,
-        currentBytes
+        bytes
       );
-
-
-      outputIndex += 1;
-
-      outputCount += 1;
-
-
-      currentPdf =
-        await PDFDocument.create();
-
-
-      await addOperation(
-        currentPdf,
-        operation
-      );
-
-
-      currentBytes =
-        await currentPdf.save({
-          useObjectStreams: true
-        });
-
-
-      operationCount = 1;
-
-
-      /*
-        Одна операция сама по себе
-        может быть больше лимита.
-
-        В таком случае сохраняем ее
-        отдельным файлом.
-      */
-
-      if (
-        currentBytes.length >
-        MAX_PDF_SIZE
-      ) {
-
-        addPdfBytesToSessionZip(
-          session,
-          baseFileName,
-          outputIndex,
-          currentBytes
-        );
-
-
-        outputIndex += 1;
-
-        outputCount += 1;
-
-
-        currentPdf =
-          await PDFDocument.create();
-
-
-        currentBytes = null;
-
-        operationCount = 0;
-
-      }
-
-    } else {
-
-      currentBytes =
-        candidateBytes;
-
-
-      operationCount += 1;
-
-
-      if (
-        currentBytes.length >
-        MAX_PDF_SIZE
-      ) {
-
-        addPdfBytesToSessionZip(
-          session,
-          baseFileName,
-          outputIndex,
-          currentBytes
-        );
-
-
-        outputIndex += 1;
-
-        outputCount += 1;
-
-
-        currentPdf =
-          await PDFDocument.create();
-
-
-        currentBytes = null;
-
-        operationCount = 0;
-
-      }
-
     }
-
-  }
-
-
-  if (
-    operationCount > 0 &&
-    currentBytes
-  ) {
-
-    addPdfBytesToSessionZip(
-      session,
-      baseFileName,
-      outputIndex,
-      currentBytes
-    );
-
-
-    outputCount += 1;
-
-  }
-
-
-  return outputCount;
+  });
 
 }
 

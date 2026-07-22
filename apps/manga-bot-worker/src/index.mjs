@@ -1,5 +1,6 @@
 import express from "express";
 
+import { boundedInteger } from "./concurrency.mjs";
 import { createKindleClient } from "./kindle-client.mjs";
 import { createMangaAppClient } from "./manga-app.mjs";
 import { Orchestrator } from "./orchestrator.mjs";
@@ -21,7 +22,10 @@ const orchestrator = ready ? new Orchestrator({
   telegram,
   mangaApp: createMangaAppClient({ baseUrl: config.mangaAppUrl, sessionToken: config.mangaAppSessionToken }),
   kindle: createKindleClient({ baseUrl: config.kindleWorkerUrl, sharedSecret: config.kindleSharedSecret }),
-  maxPdfBytes: config.maxPdfBytes
+  maxPdfBytes: config.maxPdfBytes,
+  chapterProcessingConcurrency: config.chapterProcessingConcurrency,
+  epubBuildConcurrency: config.epubBuildConcurrency,
+  kindleUploadConcurrency: config.kindleUploadConcurrency
 }) : null;
 
 const app = express();
@@ -122,7 +126,22 @@ function readConfig(env) {
     kindleSharedSecret: optional(env, "KINDLE_SHARED_SECRET"),
     publicBaseUrl: String(env.PUBLIC_BASE_URL || "").replace(/\/$/, ""),
     adminToken: env.ADMIN_API_TOKEN || "",
-    maxPdfBytes: Number(env.MAX_PDF_BYTES || DEFAULT_MAX_PDF_BYTES)
+    maxPdfBytes: Number(env.MAX_PDF_BYTES || DEFAULT_MAX_PDF_BYTES),
+    chapterProcessingConcurrency: boundedInteger(
+      env.CHAPTER_PROCESSING_CONCURRENCY,
+      2,
+      { min: 1, max: 4 }
+    ),
+    epubBuildConcurrency: boundedInteger(
+      env.EPUB_BUILD_CONCURRENCY,
+      2,
+      { min: 1, max: 4 }
+    ),
+    kindleUploadConcurrency: boundedInteger(
+      env.KINDLE_UPLOAD_CONCURRENCY,
+      2,
+      { min: 1, max: 4 }
+    )
   };
   if (!Number.isFinite(config.maxPdfBytes) || config.maxPdfBytes < 10_000_000 || config.maxPdfBytes > MAX_ALLOWED_PDF_BYTES) {
     throw new Error("MAX_PDF_BYTES must be between 10 MB and 150 MB");

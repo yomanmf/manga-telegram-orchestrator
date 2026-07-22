@@ -1,18 +1,44 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { buildKindleVolumesInSubprocess } from "./pdf-subprocess.mjs";
+import { boundedInteger, mapWithConcurrency } from "./concurrency.mjs";
+import { buildKindleImageVolumesInSubprocess } from "./pdf-subprocess.mjs";
 import { cleanTitle, helpText, normalizeTitle, parseCommand } from "./command.mjs";
 import { selectChapterRange } from "./chapters.mjs";
 import { choicesKeyboard } from "./telegram.mjs";
 
 export class Orchestrator {
-  constructor({ store, telegram, mangaApp, kindle, maxPdfBytes, tempRoot = "/tmp/manga-jobs" }) {
+  constructor({
+    store,
+    telegram,
+    mangaApp,
+    kindle,
+    maxPdfBytes,
+    chapterProcessingConcurrency = 2,
+    epubBuildConcurrency = 2,
+    kindleUploadConcurrency = 2,
+    tempRoot = "/tmp/manga-jobs"
+  }) {
     this.store = store;
     this.telegram = telegram;
     this.mangaApp = mangaApp;
     this.kindle = kindle;
     this.maxPdfBytes = maxPdfBytes;
+    this.chapterProcessingConcurrency = boundedInteger(
+      chapterProcessingConcurrency,
+      2,
+      { min: 1, max: 4 }
+    );
+    this.epubBuildConcurrency = boundedInteger(
+      epubBuildConcurrency,
+      2,
+      { min: 1, max: 4 }
+    );
+    this.kindleUploadConcurrency = boundedInteger(
+      kindleUploadConcurrency,
+      2,
+      { min: 1, max: 4 }
+    );
     this.tempRoot = tempRoot;
     this.running = false;
     this.timer = null;
@@ -118,46 +144,30 @@ export class Orchestrator {
       });
       await fs.writeFile(coverPath, cover, { mode: 0o600 });
 
-      const sourcePdfs = await this.processChapters(job);
+      const imageSources = await this.processChapters(job);
       job = this.store.getJob(job.id);
       if (job.status === "cancelled") return;
 
-      job = this.store.updateJob(job.id, { progress: `Собираю Kindle EPUB из ${sourcePdfs.length} PDF-файлов` });
+      job = this.store.updateJob(job.id, { progress: `Собираю Kindle EPUB напрямую из изображений ${imageSources.length} глав` });
       await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
-      const volumes = await buildKindleVolumesInSubprocess({
-        sourcePdfs,
+      const volumes = await buildKindleImageVolumesInSubprocess({
+        sources: imageSources,
         destinationDir: path.join(workDir, "volumes"),
         baseName: job.seriesTitle,
         maxBytes: this.maxPdfBytes,
         mergeVerticalPages: job.mergeVerticalPages,
-        coverPath
+        coverPath,
+        imageRenderConcurrency: this.epubBuildConcurrency,
+        epubBuildConcurrency: this.epubBuildConcurrency
       });
       if (volumes.some((volume) => volume.oversize)) {
         throw new Error("Одна часть превышает безопасный лимит Kindle; требуется разбиение исходной главы");
       }
 
-      const queued = [...job.kindleJobs];
       const batchId = job.id;
-      for (const volume of volumes) {
-        if (queued.some((item) => item.filename === volume.fileName)) continue;
-        job = this.store.getJob(job.id);
-        if (job.status === "cancelled") return;
-        job = this.store.updateJob(job.id, { progress: `Передаю в Kindle: ${volume.fileName}` });
-        await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
-        const kindleJob = await this.kindle.enqueueFile(
-          volume.filePath,
-          volume.fileName,
-          { batchId, deferStart: true }
-        );
-        queued.push({
-          id: kindleJob.id,
-          filename: volume.fileName,
-          size: kindleJob.size,
-          status: kindleJob.status,
-          batchId
-        });
-        this.store.updateJob(job.id, { kindleJobs: queued });
-      }
+      const queued = await this.enqueueVolumes(job, volumes, batchId);
+      job = this.store.getJob(job.id);
+      if (job.status === "cancelled") return;
       if (queued.some((item) => item.batchId === batchId)) {
         await this.kindle.startBatch(batchId);
       }
@@ -206,45 +216,105 @@ export class Orchestrator {
   async processChapters(job) {
     const workDir = path.join(this.tempRoot, job.id, "chapters");
     await fs.mkdir(workDir, { recursive: true });
-    const sources = [];
     const chapters = job.chapterManifest;
-    for (let index = 0; index < chapters.length; index += 1) {
-      const current = this.store.getJob(job.id);
-      if (!current || current.status === "cancelled") return [];
-      const chapter = chapters[index];
-      const processing = `Обрабатываю ${index + 1}/${chapters.length}: ${chapter.title}`;
-      this.store.updateJob(job.id, { progress: processing });
-      const outputs = await this.mangaApp.processChapter({
-        chapterId: chapter.id,
-        mangaTitle: job.seriesTitle,
-        chapterTitle: chapter.title,
-        shouldMerge: job.mergeVerticalPages
-      });
-      for (let part = 0; part < outputs.length; part += 1) {
-        const filePath = path.join(workDir, `${String(index + 1).padStart(4, "0")}-${String(part + 1).padStart(2, "0")}.pdf`);
-        await fs.writeFile(filePath, outputs[part].bytes);
-        sources.push({
-          name: `${chapter.title} ${outputs[part].name}`,
-          chapterTitle: chapter.title,
-          filePath
+    let completedCount = 0;
+    const chapterSources = await mapWithConcurrency(
+      chapters,
+      this.chapterProcessingConcurrency,
+      async (chapter, index) => {
+        const current = this.store.getJob(job.id);
+        if (!current || current.status === "cancelled") return null;
+        const processing = `Обрабатываю ${index + 1}/${chapters.length}: ${chapter.title}`;
+        this.store.updateJob(job.id, { progress: processing });
+        const pages = await this.mangaApp.processChapterImages({
+          chapterId: chapter.id,
+          mangaTitle: job.seriesTitle,
+          chapterTitle: chapter.title
         });
+
+        const latest = this.store.getJob(job.id);
+        if (!latest || latest.status === "cancelled") return null;
+
+        const chapterDir = path.join(workDir, String(index + 1).padStart(4, "0"));
+        await fs.mkdir(chapterDir, { recursive: true });
+        const storedPages = await Promise.all(pages.map(async (page, pageIndex) => {
+          const extension = page.format === "jpg" ? "jpg" : "png";
+          const filePath = path.join(
+            chapterDir,
+            `page-${String(pageIndex + 1).padStart(4, "0")}.${extension}`
+          );
+          await fs.writeFile(filePath, page.bytes);
+          return {
+            filePath,
+            width: page.width,
+            height: page.height,
+            format: page.format
+          };
+        }));
+
+        completedCount += 1;
+        const completed = `Обработано ${completedCount}/${chapters.length}: ${chapter.title}`;
+        this.store.updateJob(job.id, { progress: completed });
+        if (completedCount % 3 === 0 || completedCount === chapters.length) {
+          await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: обработано ${completedCount}/${chapters.length} глав.`);
+        }
+        return {
+          name: chapter.title,
+          chapterTitle: chapter.title,
+          pages: storedPages
+        };
       }
-      const completed = `Обработано ${index + 1}/${chapters.length}: ${chapter.title}`;
-      this.store.updateJob(job.id, { progress: completed });
-      if ((index + 1) % 3 === 0 || index + 1 === chapters.length) {
-        await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: обработано ${index + 1}/${chapters.length} глав.`);
+    );
+    return chapterSources.filter(Boolean);
+  }
+
+  async enqueueVolumes(job, volumes, batchId = job.id) {
+    const queued = [...job.kindleJobs];
+    const volumeOrder = new Map(
+      volumes.map((volume, index) => [volume.fileName, index])
+    );
+    const remaining = volumes.filter(
+      (volume) => !queued.some((item) => item.filename === volume.fileName)
+    );
+
+    await mapWithConcurrency(
+      remaining,
+      this.kindleUploadConcurrency,
+      async (volume) => {
+        let current = this.store.getJob(job.id);
+        if (!current || current.status === "cancelled") return null;
+        current = this.store.updateJob(job.id, { progress: `Передаю в Kindle: ${volume.fileName}` });
+        await this.sendProgress(current.chatId, `Задание ${shortId(job.id)}: ${current.progress}.`);
+        const kindleJob = await this.kindle.enqueueFile(
+          volume.filePath,
+          volume.fileName,
+          { batchId, deferStart: true }
+        );
+        queued.push({
+          id: kindleJob.id,
+          filename: volume.fileName,
+          size: kindleJob.size,
+          status: kindleJob.status,
+          batchId
+        });
+        queued.sort((left, right) =>
+          (volumeOrder.get(left.filename) ?? Number.MAX_SAFE_INTEGER) -
+          (volumeOrder.get(right.filename) ?? Number.MAX_SAFE_INTEGER)
+        );
+        this.store.updateJob(job.id, { kindleJobs: [...queued] });
+        return kindleJob;
       }
-    }
-    return sources;
+    );
+
+    return queued;
   }
 
   async reconcileDelivery(job) {
     try {
-      const entries = [];
-      for (const submitted of job.kindleJobs) {
+      const entries = await Promise.all(job.kindleJobs.map(async (submitted) => {
         const current = await this.kindle.job(submitted.id);
-        entries.push({ ...submitted, status: current.job.status, error: current.job.error || null });
-      }
+        return { ...submitted, status: current.job.status, error: current.job.error || null };
+      }));
       if (entries.some((entry) => entry.status === "failed")) {
         const failed = entries.find((entry) => entry.status === "failed");
         this.store.updateJob(job.id, { status: "failed", kindleJobs: entries, error: failed.error || "Amazon rejected an EPUB" });
