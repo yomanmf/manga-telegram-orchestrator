@@ -90,7 +90,7 @@ export function normalizeTitle(value) {
 
 export function helpText() {
   return [
-    "Я собираю мангу в EPUB с обложкой и отправляю её на Kindle.",
+    "📖 Я собираю мангу в EPUB с обложкой и отправляю её на Kindle.",
     "",
     "Пример:",
     "Отправь Fable с 201 до последней",

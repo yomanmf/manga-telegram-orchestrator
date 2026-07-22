@@ -54,7 +54,7 @@ export class Orchestrator {
     const chatId = String(message.chat?.id || "");
     const parsed = parseCommand(message.text || "");
     if (parsed.type === "help" || parsed.type === "unknown") {
-      await this.telegram.sendMessage(chatId, parsed.type === "unknown" ? `${helpText()}\n\nНе понял команду.` : helpText());
+      await this.telegram.sendMessage(chatId, parsed.type === "unknown" ? `❓ Не понял команду.\n\n${helpText()}` : helpText());
       return;
     }
     if (parsed.type === "status") return this.sendStatus(chatId);
@@ -65,7 +65,7 @@ export class Orchestrator {
     if (parsed.type === "send") {
       const existing = this.store.latestJob(chatId, ["queued", "resume_pending", "processing", "delivering", "waiting_auth", "waiting_choice"]);
       if (existing) {
-        await this.telegram.sendMessage(chatId, `Уже скачиваю ${jobTitle(existing)}.\n${describeJob(existing)}\n/status — детали, /cancel — отменить.`);
+        await this.telegram.sendMessage(chatId, `⏳ Уже скачиваю ${jobTitle(existing)}.\n${describeJob(existing)}\n/status — детали, /cancel — отменить.`);
         return;
       }
       const job = this.store.createJob({
@@ -77,7 +77,7 @@ export class Orchestrator {
         mergeVerticalPages: this.store.getMergeVerticalPages(chatId),
         progress: "Ищу мангу"
       });
-      await this.sendProgress(job.id, `Начинаю скачивать ${parsed.titleQuery}: ${formatChapterRange(parsed.fromChapter, parsed.toChapter)}.`);
+      await this.sendProgress(job.id, `⬇️ Начинаю скачивать ${parsed.titleQuery}: ${formatChapterRange(parsed.fromChapter, parsed.toChapter)}.`);
       return;
     }
   }
@@ -86,11 +86,11 @@ export class Orchestrator {
     const chatId = String(callback.message?.chat?.id || "");
     const data = String(callback.data || "");
     const match = data.match(/^choose:([\w-]+):(\d+)$/);
-    if (!match) return this.telegram.answerCallbackQuery(callback.id, "Неизвестное действие");
+    if (!match) return this.telegram.answerCallbackQuery(callback.id, "❌ Неизвестное действие");
     const job = this.store.getJob(match[1]);
     const choice = job?.choiceManifest?.[Number(match[2])];
     if (!job || job.chatId !== chatId || job.status !== "waiting_choice" || !choice) {
-      return this.telegram.answerCallbackQuery(callback.id, "Выбор уже недоступен");
+      return this.telegram.answerCallbackQuery(callback.id, "⏳ Выбор уже недоступен");
     }
     this.store.updateJob(job.id, {
       status: "queued",
@@ -99,8 +99,8 @@ export class Orchestrator {
       choiceManifest: [],
       progress: `Выбрано: ${choice.title}`
     });
-    await this.telegram.answerCallbackQuery(callback.id, "Выбрано");
-    await this.sendProgress(job.id, `Скачиваю ${choice.title}: выбор подтверждён, начинаю обработку.`);
+    await this.telegram.answerCallbackQuery(callback.id, "✅ Выбрано");
+    await this.sendProgress(job.id, `✅ Скачиваю ${choice.title}: выбор подтверждён, начинаю обработку.`);
   }
 
   async tick() {
@@ -177,14 +177,14 @@ export class Orchestrator {
         kindleJobs: queued,
         progress: `EPUB переданы в Kindle uploader: ${queued.length} шт.`
       });
-      await this.sendProgress(job.id, `Скачиваю ${jobTitle(job)}: собрано и поставлено в Kindle-очередь ${queued.length} EPUB.`);
+      await this.sendProgress(job.id, `📤 Скачиваю ${jobTitle(job)}: собрано и поставлено в Kindle-очередь ${queued.length} EPUB.`);
       await this.reconcileDelivery(job);
     } catch (error) {
       const latest = this.store.getJob(initialJob.id);
       if (latest?.status === "cancelled") return;
       const message = errorMessage(error);
       this.store.updateJob(initialJob.id, { status: "failed", error: message, progress: "Ошибка" });
-      await this.sendProgress(initialJob.id, `Не удалось скачать ${jobTitle(latest || initialJob)}: ${message}\n/retry — повторить.`);
+      await this.sendProgress(initialJob.id, `❌ Не удалось скачать ${jobTitle(latest || initialJob)}: ${message}\n/retry — повторить.`);
     } finally {
       await fs.rm(workDir, { recursive: true, force: true }).catch((error) => {
         console.error("Cannot clean manga job workspace", workDir, error);
@@ -206,8 +206,8 @@ export class Orchestrator {
         choiceManifest: choices,
         progress: "Нужно выбрать произведение"
       });
-      await this.sendProgress(waiting.id, `Скачиваю ${jobTitle(waiting)}: нужно выбрать произведение.`);
-      await this.telegram.sendMessage(waiting.chatId, "Нашёл несколько вариантов. Выберите нужный:", {
+      await this.sendProgress(waiting.id, `🔎 Скачиваю ${jobTitle(waiting)}: нужно выбрать произведение.`);
+      await this.telegram.sendMessage(waiting.chatId, "📚 Нашёл несколько вариантов. Выберите нужный:", {
         reply_markup: choicesKeyboard(waiting)
       });
       return waiting;
@@ -258,7 +258,7 @@ export class Orchestrator {
         const completed = `Обработано ${completedCount}/${chapters.length}: ${chapter.title}`;
         this.store.updateJob(job.id, { progress: completed });
         if (completedCount % 3 === 0 || completedCount === chapters.length) {
-          await this.sendProgress(job.id, `Скачиваю ${jobTitle(job)}: обработано ${completedCount}/${chapters.length} глав`);
+          await this.sendProgress(job.id, `⬇️ Скачиваю ${jobTitle(job)}: обработано ${completedCount}/${chapters.length} глав`);
         }
         return {
           name: chapter.title,
@@ -320,12 +320,12 @@ export class Orchestrator {
       if (entries.some((entry) => entry.status === "failed")) {
         const failed = entries.find((entry) => entry.status === "failed");
         this.store.updateJob(job.id, { status: "failed", kindleJobs: entries, error: failed.error || "Amazon rejected an EPUB" });
-        await this.sendProgress(job.id, `Не удалось скачать ${jobTitle(job)}: Kindle не принял ${failed.filename}: ${failed.error || "неизвестная ошибка"}`);
+        await this.sendProgress(job.id, `❌ Не удалось скачать ${jobTitle(job)}: Kindle не принял ${failed.filename}: ${failed.error || "неизвестная ошибка"}`);
         return;
       }
       if (entries.every((entry) => entry.status === "sent")) {
         this.store.updateJob(job.id, { status: "completed", kindleJobs: entries, progress: "Amazon принял все EPUB к доставке" });
-        await this.sendProgress(job.id, `Готово: Amazon принял ${entries.length} EPUB к доставке. Синхронизация с Kindle может занять время.`);
+        await this.sendProgress(job.id, `✅ Готово: Amazon принял ${entries.length} EPUB к доставке. Синхронизация с Kindle может занять время.`);
         return;
       }
       if (entries.some((entry) => entry.status === "waiting_auth")) {
@@ -346,9 +346,9 @@ export class Orchestrator {
 
   async sendStatus(chatId) {
     const job = this.store.latestJob(chatId);
-    if (!job) return this.telegram.sendMessage(chatId, "Заданий пока нет.");
+    if (!job) return this.telegram.sendMessage(chatId, "ℹ️ Заданий пока нет.");
     const files = await this.describeKindleFiles(job.kindleJobs);
-    await this.telegram.sendMessage(chatId, `${jobTitle(job)}\n${describeJob(job)}${files ? `\n${files}` : ""}${job.error ? `\nОшибка: ${job.error}` : ""}`);
+    await this.telegram.sendMessage(chatId, `ℹ️ ${jobTitle(job)}\n${describeJob(job)}${files ? `\n${files}` : ""}${job.error ? `\nОшибка: ${job.error}` : ""}`);
   }
 
   async describeKindleFiles(entries) {
@@ -369,39 +369,39 @@ export class Orchestrator {
   async cancel(chatId) {
     const job = this.store.cancelLatest(chatId);
     if (job) {
-      await this.sendProgress(job.id, `Скачивание ${jobTitle(job)} отменено. Уже переданные в Amazon файлы нельзя отозвать автоматически.`);
+      await this.sendProgress(job.id, `🛑 Скачивание ${jobTitle(job)} отменено. Уже переданные в Amazon файлы нельзя отозвать автоматически.`);
     } else {
-      await this.telegram.sendMessage(chatId, "Нет активного задания для отмены.");
+      await this.telegram.sendMessage(chatId, "ℹ️ Нет активного задания для отмены.");
     }
   }
 
   async retry(chatId) {
     const job = this.store.retryLatest(chatId);
     if (job) {
-      await this.sendProgress(job.id, `Повторно скачиваю ${jobTitle(job)}.`);
+      await this.sendProgress(job.id, `🔄 Повторно скачиваю ${jobTitle(job)}.`);
     } else {
-      await this.telegram.sendMessage(chatId, "Нет неудавшегося задания для повтора.");
+      await this.telegram.sendMessage(chatId, "ℹ️ Нет неудавшегося задания для повтора.");
     }
   }
 
   async mergeVerticalPages(chatId, enabled) {
     if (enabled === null) {
       const current = this.store.getMergeVerticalPages(chatId);
-      await this.telegram.sendMessage(chatId, `Merge vertical pages: ${current ? "включено" : "выключено"}.\n/merge on или /merge off`);
+      await this.telegram.sendMessage(chatId, `⚙️ Merge vertical pages: ${current ? "включено" : "выключено"}.\n/merge on или /merge off`);
       return;
     }
     this.store.setMergeVerticalPages(chatId, enabled);
-    await this.telegram.sendMessage(chatId, `Merge vertical pages ${enabled ? "включено" : "выключено"}. Новые задания будут использовать эту настройку.`);
+    await this.telegram.sendMessage(chatId, `⚙️ Merge vertical pages ${enabled ? "включено" : "выключено"}. Новые задания будут использовать эту настройку.`);
   }
 
   async sendKindleConnectUrl(chatId, job = null) {
     try {
       const result = await this.kindle.connectToken();
-      const text = `${job ? `Скачиваю ${jobTitle(job)}: ` : ""}Amazon требует вход. Откройте одноразовую ссылку в течение 10 минут:\n${result.url}`;
+      const text = `🔐 ${job ? `Скачиваю ${jobTitle(job)}: ` : ""}Amazon требует вход. Откройте одноразовую ссылку в течение 10 минут:\n${result.url}`;
       if (job) await this.sendProgress(job.id, text);
       else await this.telegram.sendMessage(chatId, text);
     } catch (error) {
-      const text = `Не удалось открыть Amazon-вход: ${errorMessage(error)}`;
+      const text = `❌ Не удалось открыть Amazon-вход: ${errorMessage(error)}`;
       if (job) await this.sendProgress(job.id, text);
       else await this.telegram.sendMessage(chatId, text);
     }
@@ -450,7 +450,15 @@ function formatMegabytes(bytes) { return `${(Number(bytes) / 1_000_000).toFixed(
 function jobTitle(job) { return job.seriesTitle || job.titleQuery; }
 function downloadProgress(job, progress) {
   const normalized = String(progress).replace(/^[А-ЯЁ]/u, (letter) => letter.toLocaleLowerCase("ru-RU"));
-  return `Скачиваю ${jobTitle(job)}: ${normalized}.`;
+  return `${progressEmoji(progress)} Скачиваю ${jobTitle(job)}: ${normalized}.`;
+}
+function progressEmoji(progress) {
+  if (/^(?:Определяю|Ищу)/u.test(progress)) return "🔎";
+  if (/^Зафиксирован/u.test(progress)) return "📚";
+  if (/^Собираю/u.test(progress)) return "🛠️";
+  if (/^Передаю/u.test(progress)) return "📤";
+  if (/^Amazon/u.test(progress)) return "⏳";
+  return "⬇️";
 }
 function describeJob(job) {
   const details = [

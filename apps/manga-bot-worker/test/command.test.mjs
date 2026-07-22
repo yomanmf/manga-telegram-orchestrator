@@ -305,10 +305,11 @@ test("runs a Telegram request through direct image EPUB assembly and Kindle conf
   assert.equal(startedBatch, job.id);
   assert.deepEqual(enqueueOptions, [{ batchId: job.id, deferStart: true }]);
   assert.equal(failedProgressNotification, true);
-  const chapterProgress = messages.filter(({ text }) => /^Скачиваю One Piece \(Color\): обработано \d+\/\d+ глав$/.test(text));
+  const chapterProgress = messages.filter(({ text }) => /^⬇️ Скачиваю One Piece \(Color\): обработано \d+\/\d+ глав$/.test(text));
   assert.deepEqual(chapterProgress.map(({ text }) => text.match(/(\d+\/\d+)/)[1]), ["4/4"]);
-  assert.ok(messages.some(({ text }) => /^Скачиваю One Piece \(Color\): собираю Kindle EPUB/.test(text)));
-  assert.ok(messages.some(({ text }) => /^Скачиваю One Piece \(Color\): передаю в Kindle/.test(text)));
+  assert.ok(messages.some(({ text }) => /^🛠️ Скачиваю One Piece \(Color\): собираю Kindle EPUB/.test(text)));
+  assert.ok(messages.some(({ text }) => /^📤 Скачиваю One Piece \(Color\): передаю в Kindle/.test(text)));
+  assert.ok(messages.every(({ text }) => /^\p{Extended_Pictographic}/u.test(text)));
   assert.ok(messages.every(({ text }) => !/Задание [\da-f-]+/i.test(text)));
   assert.match(messages.at(-1).text, /Amazon принял/);
   await assert.rejects(fs.access(`${directory}/work/${job.id}`), /ENOENT/);
