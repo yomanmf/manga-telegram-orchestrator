@@ -149,13 +149,14 @@ class Store {
     const timestamp = now();
     this.db.prepare(`
       INSERT INTO analytics_events (
-        event_id, bot_id, request_type, telegram_user_id, username, chat_id,
+        event_id, bot_id, request_type, user_id, telegram_user_id, username, chat_id,
         request_text, result_text, status, error_text, started_at, finished_at,
         duration_ms, metadata, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(event_id) DO UPDATE SET
         bot_id = excluded.bot_id,
         request_type = COALESCE(excluded.request_type, analytics_events.request_type),
+        user_id = COALESCE(excluded.user_id, analytics_events.user_id),
         telegram_user_id = COALESCE(excluded.telegram_user_id, analytics_events.telegram_user_id),
         username = COALESCE(excluded.username, analytics_events.username),
         chat_id = COALESCE(excluded.chat_id, analytics_events.chat_id),
@@ -172,6 +173,7 @@ class Store {
       event.eventId,
       event.botId,
       event.requestType || null,
+      event.userId || null,
       event.telegramUserId == null ? null : String(event.telegramUserId),
       event.username || null,
       event.chatId == null ? null : String(event.chatId),
@@ -249,6 +251,7 @@ function migrate(db) {
       event_id TEXT PRIMARY KEY,
       bot_id TEXT NOT NULL,
       request_type TEXT,
+      user_id TEXT,
       telegram_user_id TEXT,
       username TEXT,
       chat_id TEXT,
@@ -274,6 +277,7 @@ function migrate(db) {
   ensureColumn(db, "jobs", "to_chapter", "TEXT NOT NULL DEFAULT 'latest'");
   ensureColumn(db, "jobs", "status_message_id", "INTEGER");
   ensureColumn(db, "jobs", "analytics_event_id", "TEXT");
+  ensureColumn(db, "analytics_events", "user_id", "TEXT");
 }
 
 function ensureColumn(db, table, column, definition) {
@@ -306,6 +310,7 @@ function hydrateAnalyticsEvent(row) {
     eventId: row.event_id,
     botId: row.bot_id,
     requestType: row.request_type,
+    userId: row.user_id,
     telegramUserId: row.telegram_user_id,
     username: row.username,
     chatId: row.chat_id,

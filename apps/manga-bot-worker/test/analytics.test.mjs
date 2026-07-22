@@ -18,7 +18,9 @@ test("validates supported analytics events", () => {
   });
   assert.equal(event.telegramUserId, "42");
   assert.equal(event.requestText, "Толстой");
+  assert.equal(validateEvent({ eventId: "tetra:abc", botId: "tetra", status: "success", userId: "anon_123" }).userId, "anon_123");
   assert.throws(() => validateEvent({ eventId: "x", botId: "unknown", status: "success" }), /botId/);
+  assert.throws(() => validateEvent({ eventId: "x", botId: "tetra", status: "success", userId: "bad id" }), /userId/);
 });
 
 test("ingests, updates and renders analytics events behind authentication", async (t) => {
@@ -86,6 +88,7 @@ test("ingests, updates and renders analytics events behind authentication", asyn
   assert.match(html, /https:\/\/example\.com/);
   assert.match(html, /PDF отправлен на Kindle/);
   assert.match(html, /reader/);
+  assert.match(html, /ReKindle/);
 });
 
 function responseRecorder() {

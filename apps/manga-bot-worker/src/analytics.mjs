@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-const BOT_IDS = new Set(["my_news_kindle_bot", "my_books_kindle_bot", "my_manga_kindle_bot"]);
+const SOURCE_IDS = new Set(["my_news_kindle_bot", "my_books_kindle_bot", "my_manga_kindle_bot", "tetra", "rekindle"]);
 const STATUSES = new Set(["received", "accepted", "success", "error", "cancelled"]);
 
 export function registerAnalyticsRoutes(app, { store, ingestToken, dashboardUsername, dashboardPassword }) {
@@ -24,7 +24,7 @@ export function registerAnalyticsRoutes(app, { store, ingestToken, dashboardUser
       res.status(401).send("Authentication required");
       return;
     }
-    const botId = BOT_IDS.has(String(req.query.bot || "")) ? String(req.query.bot) : "";
+    const botId = SOURCE_IDS.has(String(req.query.bot || "")) ? String(req.query.bot) : "";
     const days = boundedInteger(req.query.days, 30, 1, 365);
     const events = store.listAnalyticsEvents({ botId, days, limit: 1_000 });
     res.type("html").send(renderDashboard({ events, botId, days }));
@@ -34,7 +34,7 @@ export function registerAnalyticsRoutes(app, { store, ingestToken, dashboardUser
 export function validateEvent(input) {
   const eventId = requiredString(input.eventId, "eventId", 200);
   const botId = requiredString(input.botId, "botId", 80);
-  if (!BOT_IDS.has(botId)) throw new Error("botId is not supported");
+  if (!SOURCE_IDS.has(botId)) throw new Error("botId is not supported");
   const status = requiredString(input.status, "status", 24);
   if (!STATUSES.has(status)) throw new Error("status is not supported");
   const startedAt = optionalDate(input.startedAt, "startedAt") || new Date().toISOString();
@@ -45,6 +45,7 @@ export function validateEvent(input) {
     botId,
     status,
     requestType: optionalString(input.requestType, "requestType", 80),
+    userId: optionalUserIdentifier(input.userId, "userId"),
     telegramUserId: optionalIdentifier(input.telegramUserId, "telegramUserId"),
     username: optionalString(input.username, "username", 64),
     chatId: optionalIdentifier(input.chatId, "chatId"),
@@ -60,7 +61,7 @@ export function validateEvent(input) {
 
 function renderDashboard({ events, botId, days }) {
   const total = events.length;
-  const users = new Set(events.map((event) => event.telegramUserId).filter(Boolean)).size;
+  const users = new Set(events.map((event) => event.userId || event.telegramUserId).filter(Boolean)).size;
   const errors = events.filter((event) => event.status === "error").length;
   const completed = events.filter((event) => event.status === "success");
   const averageDuration = completed.length
@@ -83,7 +84,7 @@ function renderDashboard({ events, botId, days }) {
 
   return `<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Kindle bots analytics</title>
+<title>Kindle services analytics</title>
 <style>
 :root{color-scheme:dark;--bg:#0c1220;--panel:#151d2f;--muted:#8d9bb8;--line:#27334e;--accent:#7aa2ff;--ok:#43d17f;--bad:#ff6b7a}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:#f1f5ff;font:14px/1.45 system-ui,sans-serif}
@@ -95,11 +96,11 @@ form{display:flex;gap:10px;flex-wrap:wrap;margin:22px 0}select,button{background
 .table-wrap{overflow:auto;max-height:650px}table{width:100%;border-collapse:collapse;min-width:1100px}th{position:sticky;top:0;background:#1b253a;text-align:left;color:#b7c4de}th,td{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}.wrap{white-space:pre-wrap;max-width:340px;overflow-wrap:anywhere}.nowrap{white-space:nowrap}.status{font-size:12px;padding:3px 7px;border-radius:999px;background:#313d57}.status.success{color:var(--ok)}.status.error{color:var(--bad)}
 @media(max-width:900px){main{padding:16px}.cards{grid-template-columns:repeat(2,1fr)}.charts{grid-template-columns:1fr}}
 </style></head><body><main>
-<h1>Аналитика Kindle-ботов</h1><div class="muted">Запросы, результаты и активность пользователей</div>
-<form method="get"><select name="bot"><option value="">Все боты</option>${botOptions(botId)}</select><select name="days">${dayOptions(days)}</select><button type="submit">Применить</button></form>
+<h1>Аналитика Kindle-сервисов</h1><div class="muted">Запросы, результаты и активность пользователей</div>
+<form method="get"><select name="bot"><option value="">Все сервисы</option>${sourceOptions(botId)}</select><select name="days">${dayOptions(days)}</select><button type="submit">Применить</button></form>
 <section class="cards"><div class="card"><div class="muted">Запросов</div><div class="metric">${total}</div></div><div class="card"><div class="muted">Пользователей</div><div class="metric">${users}</div></div><div class="card"><div class="muted">Ошибок</div><div class="metric">${errors}</div></div><div class="card"><div class="muted">Среднее время</div><div class="metric">${formatDuration(averageDuration)}</div></div></section>
-<section class="charts"><div class="panel chart"><h2>Запросы по дням</h2>${verticalBars(daily)}</div><div class="panel chart"><h2>По ботам</h2>${horizontalBars(byBot, botLabel)}</div><div class="panel chart"><h2>Типы запросов</h2>${horizontalBars(byType)}</div></section>
-<section class="panel"><h2>История запросов</h2><div class="table-wrap"><table><thead><tr><th>Время</th><th>Бот</th><th>Пользователь</th><th>Тип</th><th>Запрос</th><th>Результат</th><th>Статус</th><th>Время</th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="muted">Событий пока нет</td></tr>'}</tbody></table></div></section>
+<section class="charts"><div class="panel chart"><h2>Запросы по дням</h2>${verticalBars(daily)}</div><div class="panel chart"><h2>По сервисам</h2>${horizontalBars(byBot, botLabel)}</div><div class="panel chart"><h2>Типы запросов</h2>${horizontalBars(byType)}</div></section>
+<section class="panel"><h2>История запросов</h2><div class="table-wrap"><table><thead><tr><th>Время</th><th>Сервис</th><th>Пользователь</th><th>Тип</th><th>Запрос</th><th>Результат</th><th>Статус</th><th>Время</th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="muted">Событий пока нет</td></tr>'}</tbody></table></div></section>
 </main></body></html>`;
 }
 
@@ -135,8 +136,8 @@ function horizontalBars(items, labeler = (value) => value) {
   return items.map((item) => `<div class="hbar"><span>${escapeHtml(labeler(item.label))}</span><div class="track"><div class="fill" style="width:${item.value / max * 100}%"></div></div><b>${item.value}</b></div>`).join("") || '<span class="muted">Нет данных</span>';
 }
 
-function botOptions(selected) {
-  return [...BOT_IDS].map((id) => `<option value="${id}"${selected === id ? " selected" : ""}>${escapeHtml(botLabel(id))}</option>`).join("");
+function sourceOptions(selected) {
+  return [...SOURCE_IDS].map((id) => `<option value="${id}"${selected === id ? " selected" : ""}>${escapeHtml(botLabel(id))}</option>`).join("");
 }
 
 function dayOptions(selected) {
@@ -144,10 +145,11 @@ function dayOptions(selected) {
 }
 
 function botLabel(id) {
-  return ({ my_news_kindle_bot: "Новости", my_books_kindle_bot: "Книги", my_manga_kindle_bot: "Манга" })[id] || id;
+  return ({ my_news_kindle_bot: "Новости", my_books_kindle_bot: "Книги", my_manga_kindle_bot: "Манга", tetra: "TETRA", rekindle: "ReKindle" })[id] || id;
 }
 
 function userLabel(event) {
+  if (!event.telegramUserId && !event.username) return event.userId || "аноним";
   const username = event.username ? `@${event.username}` : "без username";
   return `${username} (${event.telegramUserId || "—"})`;
 }
@@ -195,6 +197,12 @@ function optionalIdentifier(value, name) {
   if (value == null || value === "") return null;
   const result = String(value);
   if (!/^-?\d{1,20}$/.test(result)) throw new Error(`${name} must be a Telegram numeric id`);
+  return result;
+}
+function optionalUserIdentifier(value, name) {
+  if (value == null || value === "") return null;
+  const result = String(value);
+  if (!/^[a-zA-Z0-9._:@-]{1,200}$/.test(result)) throw new Error(`${name} is invalid`);
   return result;
 }
 function optionalDate(value, name) {
