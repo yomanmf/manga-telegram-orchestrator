@@ -315,7 +315,7 @@ test("runs a Telegram request through direct image EPUB assembly and Kindle conf
   await assert.rejects(fs.access(`${directory}/work/${job.id}`), /ENOENT/);
 });
 
-test("cleans the job workspace after a processing failure", async () => {
+test("keeps completed chapter checkpoints after a processing failure", async () => {
   const directory = `/tmp/manga-orchestrator-cleanup-test-${Date.now()}-${Math.random()}`;
   const store = createStore(directory);
   let processed = 0;
@@ -356,7 +356,65 @@ test("cleans the job workspace after a processing failure", async () => {
   const job = store.latestJob("8");
   assert.equal(job.status, "failed");
   assert.match(job.error, /processor unavailable/);
-  await assert.rejects(fs.access(`${directory}/work/${job.id}`), /ENOENT/);
+  await fs.access(`${directory}/work/${job.id}/chapters/0001/manifest.json`);
+});
+
+test("retry resumes from completed chapter checkpoints", async () => {
+  const directory = `/tmp/manga-orchestrator-resume-test-${Date.now()}-${Math.random()}`;
+  const store = createStore(directory);
+  const processed = [];
+  let failSecondChapter = true;
+  const orchestrator = new Orchestrator({
+    store,
+    telegram: { async sendMessage() {}, async answerCallbackQuery() {} },
+    mangaApp: {
+      async search() { return { results: [{ title: "Resume", url: "/resume" }] }; },
+      async loadSeries() {
+        return {
+          title: "Resume",
+          coverUrl: "https://images.example.test/resume.png",
+          chapters: [
+            { id: "one", title: "Chapter 1" },
+            { id: "two", title: "Chapter 2" }
+          ]
+        };
+      },
+      async downloadCover() { return TEST_COVER; },
+      async processChapterImages({ chapterId }) {
+        processed.push(chapterId);
+        if (chapterId === "two" && failSecondChapter) {
+          failSecondChapter = false;
+          throw new Error("WeebCentral returned HTTP 429");
+        }
+        return testImagePage();
+      }
+    },
+    kindle: {
+      async enqueueFile(_filePath, filename) {
+        return { id: `kindle-${filename}`, filename, size: 100, status: "queued" };
+      },
+      async startBatch() {},
+      async job() { return { job: { status: "sent" } }; },
+      async connectToken() { return { url: "https://example.test/connect" }; }
+    },
+    maxPdfBytes: 10_000_000,
+    chapterProcessingConcurrency: 1,
+    tempRoot: `${directory}/work`
+  });
+
+  await orchestrator.handleMessage({ chat: { id: 10 }, text: "Отправь Resume все главы" });
+  await orchestrator.tick();
+  const failed = store.latestJob("10");
+  assert.equal(failed.status, "failed");
+  await fs.access(`${directory}/work/${failed.id}/chapters/0001/manifest.json`);
+
+  await orchestrator.handleMessage({ chat: { id: 10 }, text: "/retry" });
+  await orchestrator.tick();
+
+  const completed = store.latestJob("10");
+  assert.equal(completed.status, "completed");
+  assert.deepEqual(processed, ["one", "two", "two"]);
+  await assert.rejects(fs.access(`${directory}/work/${completed.id}`), /ENOENT/);
 });
 
 test("cleans the job workspace after cancellation during processing", async () => {

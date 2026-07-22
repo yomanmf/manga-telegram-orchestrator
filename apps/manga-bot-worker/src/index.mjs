@@ -1,4 +1,5 @@
 import express from "express";
+import path from "node:path";
 
 import { boundedInteger } from "./concurrency.mjs";
 import { createKindleClient } from "./kindle-client.mjs";
@@ -23,6 +24,7 @@ const orchestrator = ready ? new Orchestrator({
   mangaApp: createMangaAppClient({ baseUrl: config.mangaAppUrl, sessionToken: config.mangaAppSessionToken }),
   kindle: createKindleClient({ baseUrl: config.kindleWorkerUrl, sharedSecret: config.kindleSharedSecret }),
   maxPdfBytes: config.maxPdfBytes,
+  tempRoot: path.join(config.dataDir, "manga-jobs"),
   chapterProcessingConcurrency: config.chapterProcessingConcurrency,
   epubBuildConcurrency: config.epubBuildConcurrency,
   kindleUploadConcurrency: config.kindleUploadConcurrency
@@ -129,7 +131,7 @@ function readConfig(env) {
     maxPdfBytes: Number(env.MAX_PDF_BYTES || DEFAULT_MAX_PDF_BYTES),
     chapterProcessingConcurrency: boundedInteger(
       env.CHAPTER_PROCESSING_CONCURRENCY,
-      2,
+      1,
       { min: 1, max: 4 }
     ),
     epubBuildConcurrency: boundedInteger(

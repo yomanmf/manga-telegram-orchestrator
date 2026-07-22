@@ -20,6 +20,7 @@ import {
   writePdfBatches
 } from "./pdf-batch-writer.mjs";
 import {
+  fetchWeebCentralResponse,
   fetchWeebCentralImageBytes
 } from "./weebcentral-image-fetch.mjs";
 
@@ -29,7 +30,7 @@ const MAX_PDF_SIZE = 185 * 1024 * 1024;
 const WEEBCENTRAL_IMAGE_CONCURRENCY =
   boundedInteger(
     process.env.WEEBCENTRAL_IMAGE_CONCURRENCY,
-    6,
+    3,
     { min: 1, max: 16 }
   );
 const WEEBCENTRAL_IMAGE_TIMEOUT_MS =
@@ -5589,11 +5590,10 @@ async function fetchWeebCentralSearchHtml(
   query
 ) {
 
-  const response = await fetch(
+  const result = await fetchWeebCentralResponse(
     WEEBCENTRAL_BASE_URL +
       "/search/simple?location=main",
     {
-      method: "POST",
       headers: {
         "User-Agent":
           WEEBCENTRAL_USER_AGENT,
@@ -5607,22 +5607,28 @@ async function fetchWeebCentralSearchHtml(
           WEEBCENTRAL_BASE_URL +
           "/search"
       },
-      body: new URLSearchParams({
-        text: query
-      }).toString()
+      requestOptions: {
+        method: "POST",
+        body: new URLSearchParams({
+          text: query
+        }).toString()
+      },
+      consume: function (response) {
+        return response.text();
+      }
     }
   );
 
 
-  if (!response.ok) {
+  if (!result.response.ok) {
     throw new Error(
       "WeebCentral returned HTTP " +
-      response.status
+      result.response.status
     );
   }
 
 
-  return response.text();
+  return result.value;
 
 }
 
@@ -6003,8 +6009,10 @@ async function fetchWeebCentralChapterImage(
       timeoutMs:
         WEEBCENTRAL_IMAGE_TIMEOUT_MS,
       retryDelays: [
-        250 + jitter,
-        500 + jitter
+        1_000 + jitter,
+        2_000 + jitter,
+        4_000 + jitter,
+        8_000 + jitter
       ]
     }
   );
@@ -6065,25 +6073,28 @@ async function fetchWeebCentralText(
   extraHeaders = {}
 ) {
 
-  const response = await fetch(url, {
+  const result = await fetchWeebCentralResponse(url, {
     headers: {
       "User-Agent":
         WEEBCENTRAL_USER_AGENT,
       "Accept": "text/html",
       ...extraHeaders
+    },
+    consume: function (response) {
+      return response.text();
     }
   });
 
 
-  if (!response.ok) {
+  if (!result.response.ok) {
     throw new Error(
       "WeebCentral returned HTTP " +
-      response.status
+      result.response.status
     );
   }
 
 
-  return response.text();
+  return result.value;
 
 }
 

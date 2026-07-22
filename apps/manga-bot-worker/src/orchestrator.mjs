@@ -14,10 +14,10 @@ export class Orchestrator {
     mangaApp,
     kindle,
     maxPdfBytes,
-    chapterProcessingConcurrency = 2,
+    chapterProcessingConcurrency = 1,
     epubBuildConcurrency = 2,
     kindleUploadConcurrency = 2,
-    tempRoot = "/tmp/manga-jobs"
+    tempRoot = "/data/manga-jobs"
   }) {
     this.store = store;
     this.telegram = telegram;
@@ -26,7 +26,7 @@ export class Orchestrator {
     this.maxPdfBytes = maxPdfBytes;
     this.chapterProcessingConcurrency = boundedInteger(
       chapterProcessingConcurrency,
-      2,
+      1,
       { min: 1, max: 4 }
     );
     this.epubBuildConcurrency = boundedInteger(
@@ -128,22 +128,33 @@ export class Orchestrator {
 
       job = await this.resolveSeries(job);
       if (job.status === "waiting_choice") return;
-      const series = await this.mangaApp.loadSeries(job.seriesUrl);
-      const chapters = selectChapterRange(series.chapters, job.fromChapter, job.toChapter);
-      job = this.store.updateJob(job.id, {
-        seriesTitle: series.title,
-        chapterManifest: chapters,
-        progress: `Зафиксирован диапазон: ${chapters[0].title} — ${chapters.at(-1).title} (${chapters.length} глав)`
-      });
-      await this.sendProgress(job.id, downloadProgress(job, job.progress));
-
       const coverPath = path.join(workDir, "cover.img");
       await fs.mkdir(workDir, { recursive: true });
-      const cover = await this.mangaApp.downloadCover({
-        coverUrl: series.coverUrl,
-        seriesUrl: job.seriesUrl
-      });
-      await fs.writeFile(coverPath, cover, { mode: 0o600 });
+      const canResume = initialJob.status === "resume_pending" &&
+        job.seriesUrl && job.seriesTitle && job.chapterManifest.length > 0 &&
+        await isNonEmptyFile(coverPath);
+      if (canResume) {
+        job = this.store.updateJob(job.id, {
+          progress: `Возобновляю сохранённый диапазон (${job.chapterManifest.length} глав)`
+        });
+        await this.sendProgress(job.id, downloadProgress(job, job.progress));
+      } else {
+        const series = await this.mangaApp.loadSeries(job.seriesUrl);
+        const chapters = selectChapterRange(series.chapters, job.fromChapter, job.toChapter);
+        job = this.store.updateJob(job.id, {
+          seriesTitle: series.title,
+          chapterManifest: chapters,
+          progress: `Зафиксирован диапазон: ${chapters[0].title} — ${chapters.at(-1).title} (${chapters.length} глав)`
+        });
+        await this.sendProgress(job.id, downloadProgress(job, job.progress));
+        if (!await isNonEmptyFile(coverPath)) {
+          const cover = await this.mangaApp.downloadCover({
+            coverUrl: series.coverUrl,
+            seriesUrl: job.seriesUrl
+          });
+          await fs.writeFile(coverPath, cover, { mode: 0o600 });
+        }
+      }
 
       const imageSources = await this.processChapters(job);
       job = this.store.getJob(job.id);
@@ -186,9 +197,10 @@ export class Orchestrator {
       this.store.updateJob(initialJob.id, { status: "failed", error: message, progress: "Ошибка" });
       await this.sendProgress(initialJob.id, `❌ Не удалось скачать ${jobTitle(latest || initialJob)}: ${message}\n/retry — повторить.`);
     } finally {
-      await fs.rm(workDir, { recursive: true, force: true }).catch((error) => {
-        console.error("Cannot clean manga job workspace", workDir, error);
-      });
+      const latest = this.store.getJob(initialJob.id);
+      if (["completed", "cancelled"].includes(latest?.status)) {
+        await this.cleanupWorkspace(initialJob.id);
+      }
     }
   }
 
@@ -226,6 +238,15 @@ export class Orchestrator {
       async (chapter, index) => {
         const current = this.store.getJob(job.id);
         if (!current || current.status === "cancelled") return null;
+        const chapterDir = path.join(workDir, String(index + 1).padStart(4, "0"));
+        const checkpoint = await readChapterCheckpoint(chapterDir, chapter);
+        if (checkpoint) {
+          completedCount += 1;
+          this.store.updateJob(job.id, {
+            progress: `Восстановлено ${completedCount}/${chapters.length}: ${chapter.title}`
+          });
+          return checkpoint;
+        }
         const processing = `Обрабатываю ${index + 1}/${chapters.length}: ${chapter.title}`;
         this.store.updateJob(job.id, { progress: processing });
         const pages = await this.mangaApp.processChapterImages({
@@ -237,7 +258,6 @@ export class Orchestrator {
         const latest = this.store.getJob(job.id);
         if (!latest || latest.status === "cancelled") return null;
 
-        const chapterDir = path.join(workDir, String(index + 1).padStart(4, "0"));
         await fs.mkdir(chapterDir, { recursive: true });
         const storedPages = await Promise.all(pages.map(async (page, pageIndex) => {
           const extension = page.format === "jpg" ? "jpg" : "png";
@@ -253,6 +273,7 @@ export class Orchestrator {
             format: page.format
           };
         }));
+        await writeChapterCheckpoint(chapterDir, chapter, storedPages);
 
         completedCount += 1;
         const completed = `Обработано ${completedCount}/${chapters.length}: ${chapter.title}`;
@@ -326,6 +347,7 @@ export class Orchestrator {
       if (entries.every((entry) => entry.status === "sent")) {
         this.store.updateJob(job.id, { status: "completed", kindleJobs: entries, progress: "Amazon принял все EPUB к доставке" });
         await this.sendProgress(job.id, `✅ Готово: Amazon принял ${entries.length} EPUB к доставке. Синхронизация с Kindle может занять время.`);
+        await this.cleanupWorkspace(job.id);
         return;
       }
       if (entries.some((entry) => entry.status === "waiting_auth")) {
@@ -382,6 +404,13 @@ export class Orchestrator {
     } else {
       await this.telegram.sendMessage(chatId, "ℹ️ Нет неудавшегося задания для повтора.");
     }
+  }
+
+  async cleanupWorkspace(jobId) {
+    const workDir = path.join(this.tempRoot, jobId);
+    await fs.rm(workDir, { recursive: true, force: true }).catch((error) => {
+      console.error("Cannot clean manga job workspace", workDir, error);
+    });
   }
 
   async mergeVerticalPages(chatId, enabled) {
@@ -443,6 +472,70 @@ export class Orchestrator {
       console.error("Telegram progress notification failed", error);
     }
   }
+}
+
+async function isNonEmptyFile(filePath) {
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.isFile() && stat.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function readChapterCheckpoint(chapterDir, chapter) {
+  try {
+    const manifest = JSON.parse(await fs.readFile(path.join(chapterDir, "manifest.json"), "utf8"));
+    if (
+      manifest.version !== 1 ||
+      manifest.chapterId !== chapter.id ||
+      manifest.chapterTitle !== chapter.title ||
+      !Array.isArray(manifest.pages) ||
+      manifest.pages.length === 0
+    ) {
+      return null;
+    }
+    const pages = [];
+    for (const page of manifest.pages) {
+      if (
+        !/^page-\d{4}\.(?:jpg|png)$/.test(page.fileName) ||
+        !["jpg", "png"].includes(page.format) ||
+        !Number.isInteger(page.width) || page.width < 1 ||
+        !Number.isInteger(page.height) || page.height < 1
+      ) {
+        return null;
+      }
+      const filePath = path.join(chapterDir, page.fileName);
+      if (!await isNonEmptyFile(filePath)) return null;
+      pages.push({
+        filePath,
+        width: page.width,
+        height: page.height,
+        format: page.format
+      });
+    }
+    return { name: chapter.title, chapterTitle: chapter.title, pages };
+  } catch {
+    return null;
+  }
+}
+
+async function writeChapterCheckpoint(chapterDir, chapter, pages) {
+  const manifest = {
+    version: 1,
+    chapterId: chapter.id,
+    chapterTitle: chapter.title,
+    pages: pages.map((page) => ({
+      fileName: path.basename(page.filePath),
+      width: page.width,
+      height: page.height,
+      format: page.format
+    }))
+  };
+  const temporary = path.join(chapterDir, "manifest.json.tmp");
+  const destination = path.join(chapterDir, "manifest.json");
+  await fs.writeFile(temporary, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+  await fs.rename(temporary, destination);
 }
 
 function errorMessage(error) { return error instanceof Error ? error.message : String(error); }

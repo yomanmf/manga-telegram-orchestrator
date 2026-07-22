@@ -86,6 +86,8 @@ Production runs in Yandex Cloud and uses three services, a Yandex Object
 Storage bucket, and two persistent disks:
 
 - the `manga-bot-worker` volume stores SQLite data at `/data`;
+- completed chapter images are checkpointed under `/data/manga-jobs` while a
+  request is active, so `/retry` and container restarts reuse finished chapters;
 - the `kindle-uploader` volume stores the Amazon browser profile and queue at
   `/data`;
 - the `kindle-pdf-queue` Object Storage bucket temporarily stores books between
@@ -110,6 +112,8 @@ The performance defaults can be tuned with
 `CHAPTER_PROCESSING_CONCURRENCY`, `EPUB_BUILD_CONCURRENCY`, and
 `KINDLE_UPLOAD_CONCURRENCY`. Increase them only after checking container memory
 and upstream throttling; the checked-in defaults are deliberately bounded.
+WeebCentral HTML and image requests honor `Retry-After` on HTTP 429 and otherwise
+use bounded exponential retry delays for temporary upstream failures.
 
 Each service is built from its own directory in this monorepo.
 

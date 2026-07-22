@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { fetchWeebCentralImageBytes } from "./weebcentral-image-fetch.mjs";
+import {
+  fetchWeebCentralImageBytes,
+  fetchWeebCentralResponse
+} from "./weebcentral-image-fetch.mjs";
 
 test("retries only the timed-out image and returns its bytes", async () => {
   const calls = [];
@@ -82,4 +85,50 @@ test("retries retryable HTTP responses but returns a permanent failure", async (
   assert.equal(result.response.status, 404);
   assert.equal(result.bytes, null);
   assert.deepEqual(cancelled, [503]);
+});
+
+test("honors Retry-After before succeeding after a 429", async () => {
+  const delays = [];
+  let attempts = 0;
+  const result = await fetchWeebCentralResponse("https://weebcentral.com/series", {
+    retryDelays: [1_000, 2_000],
+    randomImpl: () => 0,
+    sleepImpl: async (delay) => delays.push(delay),
+    fetchImpl: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return new Response("limited", {
+          status: 429,
+          headers: { "Retry-After": "7" }
+        });
+      }
+      return new Response("series", { status: 200 });
+    },
+    consume: (response) => response.text()
+  });
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(delays, [7_000]);
+  assert.equal(result.value, "series");
+});
+
+test("uses exponential fallback delays for repeated retryable responses", async () => {
+  const delays = [];
+  let attempts = 0;
+  const result = await fetchWeebCentralResponse("https://weebcentral.com/chapter", {
+    retryDelays: [1_000, 2_000, 4_000],
+    randomImpl: () => 0,
+    sleepImpl: async (delay) => delays.push(delay),
+    fetchImpl: async () => {
+      attempts += 1;
+      return new Response(attempts <= 3 ? "busy" : "chapter", {
+        status: attempts <= 3 ? 503 : 200
+      });
+    },
+    consume: (response) => response.text()
+  });
+
+  assert.equal(attempts, 4);
+  assert.deepEqual(delays, [1_000, 2_000, 4_000]);
+  assert.equal(result.value, "chapter");
 });
