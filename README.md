@@ -100,6 +100,12 @@ Each application's variables are documented in its `.env.example` file.
 
 Each service is built from its own directory in this monorepo.
 
+Pushes to `main` build only service images affected by the diff. After the full
+verification job passes, CI promotes their immutable revisions to `candidate`.
+The VM deploy agent applies a Compose image override one service at a time,
+checks local HTTP readiness, rolls back to the previous image on failure, and
+writes a sanitized terminal result to the serial console for CI.
+
 The bot caps each intermediate PDF volume at 150 MB, leaving room for EPUB
 packaging below the uploader's 200 MB hard limit.
 

@@ -1,0 +1,27 @@
+[Unit]
+Description=Deploy verified Manga service images
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/local/libexec/manga-deploy
+Restart=always
+RestartSec=5s
+StandardOutput=journal+console
+StandardError=journal+console
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=false
+ProtectSystem=full
+ReadWritePaths=/home/ubuntu/manga/deploy /run
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

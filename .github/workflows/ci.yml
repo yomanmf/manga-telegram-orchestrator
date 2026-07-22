@@ -1,18 +1,79 @@
-name: CI
+name: Test, build, and deploy
 
 on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
+
+concurrency:
+  group: manga-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      services: ${{ steps.detect.outputs.services }}
+      has_changes: ${{ steps.detect.outputs.has_changes }}
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Detect affected images
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            base="$BASE_SHA"
+          else
+            base="$BEFORE_SHA"
+          fi
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            changed=$(git ls-files)
+          else
+            changed=$(git diff --name-only "$base" "$GITHUB_SHA")
+          fi
+
+          services='[]'
+          add_service() {
+            services=$(jq -c --arg service "$1" '. + [$service] | unique' <<<"$services")
+          }
+          if grep -Eq '^(package(-lock)?\.json|\.github/workflows/|deploy/)' <<<"$changed"; then
+            add_service manga-bot-worker
+            add_service manga-pdf-processor
+            add_service kindle-uploader
+          else
+            for service in manga-bot-worker manga-pdf-processor kindle-uploader; do
+              if grep -Fq "apps/$service/" <<<"$changed"; then
+                add_service "$service"
+              fi
+            done
+          fi
+          if [[ "$services" == '[]' ]]; then
+            echo 'services=["none"]' >> "$GITHUB_OUTPUT"
+            echo 'has_changes=false' >> "$GITHUB_OUTPUT"
+          else
+            echo "services=$services" >> "$GITHUB_OUTPUT"
+            echo 'has_changes=true' >> "$GITHUB_OUTPUT"
+          fi
+
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -21,29 +82,132 @@ jobs:
             apps/manga-bot-worker/package-lock.json
             apps/manga-pdf-processor/package-lock.json
             apps/kindle-uploader/package-lock.json
+      - name: Install native test dependency
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
       - run: npm ci
       - run: npm ci --prefix apps/manga-bot-worker
       - run: npm ci --prefix apps/manga-pdf-processor
       - run: npm ci --prefix apps/kindle-uploader
       - run: npm run verify
+      - name: Validate deploy agent
+        run: python3 -m py_compile deploy/deploy_agent.py && sh -n deploy/install.sh
 
-  docker-build:
-    runs-on: ubuntu-latest
+  images:
+    needs: changes
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
-        service:
-          - manga-bot-worker
-          - manga-pdf-processor
-          - kindle-uploader
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Build ${{ matrix.service }} image
-        uses: docker/build-push-action@v6
+      - name: Check out source
+        if: matrix.service != 'none'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Authenticate to Yandex Container Registry
+        if: matrix.service != 'none' && github.event_name == 'push'
+        uses: yc-actions/yc-cr-login@ee42362bcacb854964afa3a3180ca8ae6dd388f8 # v3
+        with:
+          yc-sa-id: ${{ vars.YC_CI_SERVICE_ACCOUNT_ID }}
+      - name: Set up Buildx
+        if: matrix.service != 'none'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build affected image
+        if: matrix.service != 'none'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: apps/${{ matrix.service }}
-          tags: manga-kindle/${{ matrix.service }}:ci
-          push: false
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'push' }}
+          tags: cr.yandex/${{ vars.YC_REGISTRY_ID }}/${{ matrix.service }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.deploy-id=${{ github.run_id }}/${{ github.run_attempt }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  deploy:
+    if: github.event_name == 'push' && needs.changes.outputs.has_changes == 'true'
+    needs: [changes, verify, images]
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Authenticate to Yandex Container Registry
+        uses: yc-actions/yc-cr-login@ee42362bcacb854964afa3a3180ca8ae6dd388f8 # v3
+        with:
+          yc-sa-id: ${{ vars.YC_CI_SERVICE_ACCOUNT_ID }}
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Promote tested images
+        env:
+          REGISTRY_ID: ${{ vars.YC_REGISTRY_ID }}
+          SERVICES_JSON: ${{ needs.changes.outputs.services }}
+        run: |
+          jq -r '.[]' <<<"$SERVICES_JSON" | while read -r service; do
+            image="cr.yandex/$REGISTRY_ID/$service"
+            docker buildx imagetools create --tag "$image:candidate" "$image:$GITHUB_SHA"
+          done
+      - name: Exchange GitHub OIDC token for Yandex IAM token
+        env:
+          OIDC_AUDIENCE: https://github.com/yomanmf
+          YC_SERVICE_ACCOUNT_ID: ${{ vars.YC_CI_SERVICE_ACCOUNT_ID }}
+        run: |
+          encoded_audience=$(jq -rn --arg value "$OIDC_AUDIENCE" '$value | @uri')
+          id_token=$(curl --fail --silent --show-error \
+            --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$encoded_audience" | jq -er '.value')
+          iam_token=$(curl --fail --silent --show-error \
+            --request POST \
+            --header "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
+            --data-urlencode "requested_token_type=urn:ietf:params:oauth:token-type:access_token" \
+            --data-urlencode "audience=$YC_SERVICE_ACCOUNT_ID" \
+            --data-urlencode "subject_token=$id_token" \
+            --data-urlencode "subject_token_type=urn:ietf:params:oauth:token-type:id_token" \
+            https://auth.yandex.cloud/oauth/token | jq -er '.access_token')
+          echo "::add-mask::$iam_token"
+          echo "YC_IAM_TOKEN=$iam_token" >> "$GITHUB_ENV"
+      - name: Wait for every affected service
+        env:
+          SERVICES_JSON: ${{ needs.changes.outputs.services }}
+          YC_VM_ID: ${{ vars.YC_VM_ID }}
+        run: |
+          deploy_id="$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          pending=$(jq -c '.' <<<"$SERVICES_JSON")
+          deadline=$((SECONDS + 900))
+          while (( SECONDS < deadline )); do
+            response=$(curl --fail --silent --show-error \
+              --header "Authorization: Bearer $YC_IAM_TOKEN" \
+              "https://compute.api.cloud.yandex.net/compute/v1/instances/$YC_VM_ID:serialPortOutput?port=1")
+            contents=$(jq -r '.contents' <<<"$response")
+            next='[]'
+            while read -r service; do
+              line=$(grep -F 'DEPLOY_EVENT ' <<<"$contents" | \
+                grep -F "\"deploy_id\":\"$deploy_id\"" | \
+                grep -F "\"service\":\"$service\"" | \
+                grep -F '"terminal":true' | tail -1 || true)
+              if [[ -z "$line" ]]; then
+                next=$(jq -c --arg service "$service" '. + [$service]' <<<"$next")
+                continue
+              fi
+              event=${line#*DEPLOY_EVENT }
+              if [[ $(jq -r '.status' <<<"$event") != success ]]; then
+                jq '{service,revision,status,error_code,duration_seconds}' <<<"$event" >&2
+                exit 1
+              fi
+              jq '{service,revision,status,digest,duration_seconds,reused}' <<<"$event"
+            done < <(jq -r '.[]' <<<"$pending")
+            pending="$next"
+            if [[ "$pending" == '[]' ]]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Timed out waiting for: $pending" >&2
+          exit 1
