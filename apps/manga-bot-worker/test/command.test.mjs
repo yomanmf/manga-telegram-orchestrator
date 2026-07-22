@@ -98,6 +98,51 @@ test("deduplicates Telegram updates and persists jobs", () => {
   assert.equal(store.getMergeVerticalPages("7"), true);
   store.setMergeVerticalPages("7", false);
   assert.equal(store.getMergeVerticalPages("7"), false);
+  store.updateJob(job.id, { statusMessageId: 123 });
+  assert.equal(store.getJob(job.id).statusMessageId, 123);
+});
+
+test("edits one Telegram status message and replaces it if editing fails", async () => {
+  const directory = `/tmp/manga-progress-message-test-${Date.now()}-${Math.random()}`;
+  const store = createStore(directory);
+  const job = store.createJob({ chatId: "7", status: "queued", titleQuery: "Fable" });
+  const sent = [];
+  const edited = [];
+  let nextMessageId = 40;
+  let rejectEdit = false;
+  const orchestrator = new Orchestrator({
+    store,
+    telegram: {
+      async sendMessage(chatId, text) {
+        const message = { message_id: nextMessageId += 1 };
+        sent.push({ chatId, text, messageId: message.message_id });
+        return message;
+      },
+      async editMessage(chatId, messageId, text) {
+        if (rejectEdit) {
+          rejectEdit = false;
+          throw new Error("message to edit not found");
+        }
+        edited.push({ chatId, messageId, text });
+      }
+    },
+    mangaApp: {},
+    kindle: {},
+    maxPdfBytes: 1
+  });
+
+  await orchestrator.sendProgress(job.id, "Принято");
+  await orchestrator.sendProgress(job.id, "Обработано 3/10");
+  assert.equal(sent.length, 1);
+  assert.deepEqual(edited, [{ chatId: "7", messageId: 41, text: "Обработано 3/10" }]);
+  assert.equal(store.getJob(job.id).statusMessageId, 41);
+
+  rejectEdit = true;
+  await orchestrator.sendProgress(job.id, "Обработано 6/10");
+  assert.equal(sent.length, 2);
+  assert.equal(store.getJob(job.id).statusMessageId, 42);
+  await orchestrator.sendProgress(job.id, "Готово");
+  assert.deepEqual(edited.at(-1), { chatId: "7", messageId: 42, text: "Готово" });
 });
 
 test("processes chapters concurrently while retaining chapter order", async () => {

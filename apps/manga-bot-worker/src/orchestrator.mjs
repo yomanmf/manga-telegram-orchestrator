@@ -42,6 +42,7 @@ export class Orchestrator {
     this.tempRoot = tempRoot;
     this.running = false;
     this.timer = null;
+    this.progressUpdates = new Map();
   }
 
   start() {
@@ -76,7 +77,7 @@ export class Orchestrator {
         mergeVerticalPages: this.store.getMergeVerticalPages(chatId),
         progress: "Задание принято, ищу мангу"
       });
-      await this.telegram.sendMessage(chatId, `Задание ${shortId(job.id)} принято: «${parsed.titleQuery}», ${formatChapterRange(parsed.fromChapter, parsed.toChapter)}.`);
+      await this.sendProgress(job.id, `Задание ${shortId(job.id)} принято: «${parsed.titleQuery}», ${formatChapterRange(parsed.fromChapter, parsed.toChapter)}.`);
       return;
     }
   }
@@ -99,7 +100,7 @@ export class Orchestrator {
       progress: `Выбрано: ${choice.title}`
     });
     await this.telegram.answerCallbackQuery(callback.id, "Выбрано");
-    await this.telegram.sendMessage(chatId, `Выбрано: ${choice.title}. Начинаю обработку.`);
+    await this.sendProgress(job.id, `Задание ${shortId(job.id)}: выбрано «${choice.title}». Начинаю обработку.`);
   }
 
   async tick() {
@@ -123,7 +124,7 @@ export class Orchestrator {
     const workDir = path.join(this.tempRoot, initialJob.id);
     try {
       job = this.store.updateJob(job.id, { status: "processing", error: null, progress: "Определяю произведение" });
-      await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
+      await this.sendProgress(job.id, `Задание ${shortId(job.id)}: ${job.progress}.`);
 
       job = await this.resolveSeries(job);
       if (job.status === "waiting_choice") return;
@@ -134,7 +135,7 @@ export class Orchestrator {
         chapterManifest: chapters,
         progress: `Зафиксирован диапазон: ${chapters[0].title} — ${chapters.at(-1).title} (${chapters.length} глав)`
       });
-      await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
+      await this.sendProgress(job.id, `Задание ${shortId(job.id)}: ${job.progress}.`);
 
       const coverPath = path.join(workDir, "cover.img");
       await fs.mkdir(workDir, { recursive: true });
@@ -149,7 +150,7 @@ export class Orchestrator {
       if (job.status === "cancelled") return;
 
       job = this.store.updateJob(job.id, { progress: `Собираю Kindle EPUB напрямую из изображений ${imageSources.length} глав` });
-      await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: ${job.progress}.`);
+      await this.sendProgress(job.id, `Задание ${shortId(job.id)}: ${job.progress}.`);
       const volumes = await buildKindleImageVolumesInSubprocess({
         sources: imageSources,
         destinationDir: path.join(workDir, "volumes"),
@@ -176,14 +177,14 @@ export class Orchestrator {
         kindleJobs: queued,
         progress: `EPUB переданы в Kindle uploader: ${queued.length} шт.`
       });
-      await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: собрано и поставлено в Kindle-очередь ${queued.length} EPUB.`);
+      await this.sendProgress(job.id, `Задание ${shortId(job.id)}: собрано и поставлено в Kindle-очередь ${queued.length} EPUB.`);
       await this.reconcileDelivery(job);
     } catch (error) {
       const latest = this.store.getJob(initialJob.id);
       if (latest?.status === "cancelled") return;
       const message = errorMessage(error);
       this.store.updateJob(initialJob.id, { status: "failed", error: message, progress: "Ошибка" });
-      await this.sendProgress(initialJob.chatId, `Задание ${shortId(initialJob.id)} остановлено: ${message}\n/retry — повторить.`);
+      await this.sendProgress(initialJob.id, `Задание ${shortId(initialJob.id)} остановлено: ${message}\n/retry — повторить.`);
     } finally {
       await fs.rm(workDir, { recursive: true, force: true }).catch((error) => {
         console.error("Cannot clean manga job workspace", workDir, error);
@@ -205,6 +206,7 @@ export class Orchestrator {
         choiceManifest: choices,
         progress: "Нужно выбрать произведение"
       });
+      await this.sendProgress(waiting.id, `Задание ${shortId(waiting.id)}: нужно выбрать произведение.`);
       await this.telegram.sendMessage(waiting.chatId, "Нашёл несколько вариантов. Выберите нужный:", {
         reply_markup: choicesKeyboard(waiting)
       });
@@ -256,7 +258,7 @@ export class Orchestrator {
         const completed = `Обработано ${completedCount}/${chapters.length}: ${chapter.title}`;
         this.store.updateJob(job.id, { progress: completed });
         if (completedCount % 3 === 0 || completedCount === chapters.length) {
-          await this.sendProgress(job.chatId, `Задание ${shortId(job.id)}: обработано ${completedCount}/${chapters.length} глав.`);
+          await this.sendProgress(job.id, `Задание ${shortId(job.id)}: обработано ${completedCount}/${chapters.length} глав.`);
         }
         return {
           name: chapter.title,
@@ -284,7 +286,7 @@ export class Orchestrator {
         let current = this.store.getJob(job.id);
         if (!current || current.status === "cancelled") return null;
         current = this.store.updateJob(job.id, { progress: `Передаю в Kindle: ${volume.fileName}` });
-        await this.sendProgress(current.chatId, `Задание ${shortId(job.id)}: ${current.progress}.`);
+        await this.sendProgress(job.id, `Задание ${shortId(job.id)}: ${current.progress}.`);
         const kindleJob = await this.kindle.enqueueFile(
           volume.filePath,
           volume.fileName,
@@ -318,12 +320,12 @@ export class Orchestrator {
       if (entries.some((entry) => entry.status === "failed")) {
         const failed = entries.find((entry) => entry.status === "failed");
         this.store.updateJob(job.id, { status: "failed", kindleJobs: entries, error: failed.error || "Amazon rejected an EPUB" });
-        await this.telegram.sendMessage(job.chatId, `Kindle не принял ${failed.filename}: ${failed.error || "неизвестная ошибка"}`);
+        await this.sendProgress(job.id, `Задание ${shortId(job.id)}: Kindle не принял ${failed.filename}: ${failed.error || "неизвестная ошибка"}`);
         return;
       }
       if (entries.every((entry) => entry.status === "sent")) {
         this.store.updateJob(job.id, { status: "completed", kindleJobs: entries, progress: "Amazon принял все EPUB к доставке" });
-        await this.telegram.sendMessage(job.chatId, `Готово: Amazon принял ${entries.length} EPUB к доставке. Синхронизация с Kindle может занять время.`);
+        await this.sendProgress(job.id, `Готово: Amazon принял ${entries.length} EPUB к доставке. Синхронизация с Kindle может занять время.`);
         return;
       }
       if (entries.some((entry) => entry.status === "waiting_auth")) {
@@ -335,7 +337,7 @@ export class Orchestrator {
       const progress = "Amazon обрабатывает файлы";
       this.store.updateJob(job.id, { status: "delivering", kindleJobs: entries, progress });
       if (job.progress !== progress) {
-        await this.telegram.sendMessage(job.chatId, `Задание ${shortId(job.id)}: ${progress}.`);
+        await this.sendProgress(job.id, `Задание ${shortId(job.id)}: ${progress}.`);
       }
     } catch (error) {
       console.error("Delivery reconciliation failed", error);
@@ -366,12 +368,20 @@ export class Orchestrator {
 
   async cancel(chatId) {
     const job = this.store.cancelLatest(chatId);
-    await this.telegram.sendMessage(chatId, job ? `Задание ${shortId(job.id)} отменено. Уже переданные в Amazon файлы нельзя отозвать автоматически.` : "Нет активного задания для отмены.");
+    if (job) {
+      await this.sendProgress(job.id, `Задание ${shortId(job.id)} отменено. Уже переданные в Amazon файлы нельзя отозвать автоматически.`);
+    } else {
+      await this.telegram.sendMessage(chatId, "Нет активного задания для отмены.");
+    }
   }
 
   async retry(chatId) {
     const job = this.store.retryLatest(chatId);
-    await this.telegram.sendMessage(chatId, job ? `Задание ${shortId(job.id)} поставлено на повтор.` : "Нет неудавшегося задания для повтора.");
+    if (job) {
+      await this.sendProgress(job.id, `Задание ${shortId(job.id)} поставлено на повтор.`);
+    } else {
+      await this.telegram.sendMessage(chatId, "Нет неудавшегося задания для повтора.");
+    }
   }
 
   async mergeVerticalPages(chatId, enabled) {
@@ -387,15 +397,48 @@ export class Orchestrator {
   async sendKindleConnectUrl(chatId, jobId = null) {
     try {
       const result = await this.kindle.connectToken();
-      await this.telegram.sendMessage(chatId, `${jobId ? `Задание ${shortId(jobId)}: ` : ""}Amazon требует вход. Откройте одноразовую ссылку в течение 10 минут:\n${result.url}`);
+      const text = `${jobId ? `Задание ${shortId(jobId)}: ` : ""}Amazon требует вход. Откройте одноразовую ссылку в течение 10 минут:\n${result.url}`;
+      if (jobId) await this.sendProgress(jobId, text);
+      else await this.telegram.sendMessage(chatId, text);
     } catch (error) {
-      await this.telegram.sendMessage(chatId, `Не удалось открыть Amazon-вход: ${errorMessage(error)}`);
+      const text = `Не удалось открыть Amazon-вход: ${errorMessage(error)}`;
+      if (jobId) await this.sendProgress(jobId, text);
+      else await this.telegram.sendMessage(chatId, text);
     }
   }
 
-  async sendProgress(chatId, text) {
+  async sendProgress(jobId, text) {
+    const previous = this.progressUpdates.get(jobId) || Promise.resolve();
+    const update = previous
+      .catch(() => {})
+      .then(() => this.updateProgressMessage(jobId, text));
+    this.progressUpdates.set(jobId, update);
     try {
-      await this.telegram.sendMessage(chatId, text);
+      await update;
+    } finally {
+      if (this.progressUpdates.get(jobId) === update) {
+        this.progressUpdates.delete(jobId);
+      }
+    }
+  }
+
+  async updateProgressMessage(jobId, text) {
+    const job = this.store.getJob(jobId);
+    if (!job) return;
+    try {
+      if (job.statusMessageId && typeof this.telegram.editMessage === "function") {
+        try {
+          await this.telegram.editMessage(job.chatId, job.statusMessageId, text);
+          return;
+        } catch (error) {
+          console.error("Cannot edit Telegram progress message; creating a replacement", error);
+        }
+      }
+      const message = await this.telegram.sendMessage(job.chatId, text);
+      const messageId = Number(message?.message_id);
+      if (Number.isInteger(messageId) && messageId > 0) {
+        this.store.updateJob(job.id, { statusMessageId: messageId });
+      }
     } catch (error) {
       console.error("Telegram progress notification failed", error);
     }

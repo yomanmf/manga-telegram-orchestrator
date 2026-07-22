@@ -103,7 +103,8 @@ class Store {
       seriesTitle: "series_title", fromChapter: "from_chapter",
       toChapter: "to_chapter",
       chapterManifest: "chapter_manifest", choiceManifest: "choice_manifest",
-      progress: "progress", kindleJobs: "kindle_jobs", error: "error"
+      progress: "progress", kindleJobs: "kindle_jobs", error: "error",
+      statusMessageId: "status_message_id"
     };
     for (const [key, value] of Object.entries(patch)) {
       if (!(key in map)) continue;
@@ -164,6 +165,7 @@ function migrate(db) {
       progress TEXT NOT NULL DEFAULT '',
       kindle_jobs TEXT NOT NULL DEFAULT '[]',
       merge_vertical_pages INTEGER NOT NULL DEFAULT 1,
+      status_message_id INTEGER,
       error TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -178,6 +180,7 @@ function migrate(db) {
   `);
   ensureColumn(db, "jobs", "merge_vertical_pages", "INTEGER NOT NULL DEFAULT 1");
   ensureColumn(db, "jobs", "to_chapter", "TEXT NOT NULL DEFAULT 'latest'");
+  ensureColumn(db, "jobs", "status_message_id", "INTEGER");
 }
 
 function ensureColumn(db, table, column, definition) {
@@ -199,7 +202,8 @@ function hydrateJob(row) {
     chapterManifest: parseJson(row.chapter_manifest, []),
     choiceManifest: parseJson(row.choice_manifest, []),
     kindleJobs: parseJson(row.kindle_jobs, []),
-    mergeVerticalPages: row.merge_vertical_pages !== 0
+    mergeVerticalPages: row.merge_vertical_pages !== 0,
+    statusMessageId: row.status_message_id || null
   };
 }
 
