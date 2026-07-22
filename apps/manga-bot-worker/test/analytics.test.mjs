@@ -89,6 +89,8 @@ test("ingests, updates and renders analytics events behind authentication", asyn
   assert.match(html, /PDF отправлен на Kindle/);
   assert.match(html, /reader/);
   assert.match(html, /ReKindle/);
+  assert.match(html, /Аналитика сервисов/);
+  assert.doesNotMatch(html, /Аналитика Kindle/);
 });
 
 function responseRecorder() {

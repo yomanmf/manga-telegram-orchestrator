@@ -84,7 +84,7 @@ function renderDashboard({ events, botId, days }) {
 
   return `<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Kindle services analytics</title>
+<title>Service analytics</title>
 <style>
 :root{color-scheme:dark;--bg:#0c1220;--panel:#151d2f;--muted:#8d9bb8;--line:#27334e;--accent:#7aa2ff;--ok:#43d17f;--bad:#ff6b7a}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:#f1f5ff;font:14px/1.45 system-ui,sans-serif}
@@ -96,7 +96,7 @@ form{display:flex;gap:10px;flex-wrap:wrap;margin:22px 0}select,button{background
 .table-wrap{overflow:auto;max-height:650px}table{width:100%;border-collapse:collapse;min-width:1100px}th{position:sticky;top:0;background:#1b253a;text-align:left;color:#b7c4de}th,td{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}.wrap{white-space:pre-wrap;max-width:340px;overflow-wrap:anywhere}.nowrap{white-space:nowrap}.status{font-size:12px;padding:3px 7px;border-radius:999px;background:#313d57}.status.success{color:var(--ok)}.status.error{color:var(--bad)}
 @media(max-width:900px){main{padding:16px}.cards{grid-template-columns:repeat(2,1fr)}.charts{grid-template-columns:1fr}}
 </style></head><body><main>
-<h1>Аналитика Kindle-сервисов</h1><div class="muted">Запросы, результаты и активность пользователей</div>
+<h1>Аналитика сервисов</h1><div class="muted">Запросы, результаты и активность пользователей</div>
 <form method="get"><select name="bot"><option value="">Все сервисы</option>${sourceOptions(botId)}</select><select name="days">${dayOptions(days)}</select><button type="submit">Применить</button></form>
 <section class="cards"><div class="card"><div class="muted">Запросов</div><div class="metric">${total}</div></div><div class="card"><div class="muted">Пользователей</div><div class="metric">${users}</div></div><div class="card"><div class="muted">Ошибок</div><div class="metric">${errors}</div></div><div class="card"><div class="muted">Среднее время</div><div class="metric">${formatDuration(averageDuration)}</div></div></section>
 <section class="charts"><div class="panel chart"><h2>Запросы по дням</h2>${verticalBars(daily)}</div><div class="panel chart"><h2>По сервисам</h2>${horizontalBars(byBot, botLabel)}</div><div class="panel chart"><h2>Типы запросов</h2>${horizontalBars(byType)}</div></section>
