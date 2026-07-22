@@ -95,6 +95,7 @@ jobs:
   images:
     needs: changes
     runs-on: ubuntu-24.04
+    environment: production
     permissions:
       contents: read
       id-token: write
