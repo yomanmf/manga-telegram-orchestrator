@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-const SOURCE_IDS = new Set(["my_news_kindle_bot", "my_books_kindle_bot", "my_manga_kindle_bot", "tetra", "rekindle"]);
+const SOURCE_IDS = new Set(["my_news_kindle_bot", "my_books_kindle_bot", "my_manga_kindle_bot", "tetra", "rekindle", "manga_web"]);
 const STATUSES = new Set(["received", "accepted", "success", "error", "cancelled"]);
 
 export function registerAnalyticsRoutes(app, { store, ingestToken, dashboardUsername, dashboardPassword }) {
@@ -145,7 +145,7 @@ function dayOptions(selected) {
 }
 
 function botLabel(id) {
-  return ({ my_news_kindle_bot: "Новости", my_books_kindle_bot: "Книги", my_manga_kindle_bot: "Манга", tetra: "TETRA", rekindle: "ReKindle" })[id] || id;
+  return ({ my_news_kindle_bot: "Новости", my_books_kindle_bot: "Книги", my_manga_kindle_bot: "Манга-бот", tetra: "TETRA", rekindle: "ReKindle", manga_web: "Манга Web" })[id] || id;
 }
 
 function userLabel(event) {

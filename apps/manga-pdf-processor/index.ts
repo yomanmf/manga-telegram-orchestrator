@@ -23,6 +23,11 @@ import {
   fetchWeebCentralResponse,
   fetchWeebCentralImageBytes
 } from "./weebcentral-image-fetch.mjs";
+import { loadAnalyticsLockbox } from "./analytics-lockbox.mjs";
+import { createAnalyticsReporter } from "./analytics-reporter.mjs";
+
+await loadAnalyticsLockbox();
+const analyticsReporter = createAnalyticsReporter();
 
 const app = new Hono();
 
@@ -1172,6 +1177,123 @@ const htmlContent = `<!DOCTYPE html>
     ${acceptedKindleUploadProgress.toString()}
     ${nextKindleUploadRange.toString()}
 
+    const ANALYTICS_CLIENT_KEY =
+      "mangaWebAnalyticsClientId";
+
+    const analyticsUserId =
+      readAnalyticsUserId();
+
+    function readAnalyticsUserId() {
+      try {
+        const current =
+          localStorage.getItem(
+            ANALYTICS_CLIENT_KEY
+          );
+        if (
+          current &&
+          /^[a-zA-Z0-9._:@-]+$/.test(
+            current
+          )
+        ) {
+          return current;
+        }
+        const created =
+          "manga_web:anon_" +
+          Date.now().toString(36) +
+          "_" +
+          Math.random()
+            .toString(36)
+            .slice(2, 12);
+        localStorage.setItem(
+          ANALYTICS_CLIENT_KEY,
+          created
+        );
+        return created;
+      } catch (error) {
+        return (
+          "manga_web:session_" +
+          Date.now().toString(36) +
+          "_" +
+          Math.random()
+            .toString(36)
+            .slice(2, 12)
+        );
+      }
+    }
+
+    function mangaAnalyticsEventId(
+      prefix
+    ) {
+      return (
+        "manga_web:" +
+        (prefix || "event") +
+        "_" +
+        Date.now().toString(36) +
+        "_" +
+        Math.random()
+          .toString(36)
+          .slice(2, 10)
+      );
+    }
+
+    function sendMangaAnalytics(
+      details
+    ) {
+      details = details || {};
+      const now =
+        new Date().toISOString();
+      fetch("/analytics/events", {
+        method: "POST",
+        headers: {
+          "Content-Type":
+            "application/json"
+        },
+        body: JSON.stringify({
+          eventId:
+            details.eventId ||
+            mangaAnalyticsEventId(),
+          userId: analyticsUserId,
+          requestType:
+            details.requestType ||
+            "page_view",
+          requestText:
+            details.requestText ||
+            "GET /",
+          resultText:
+            details.resultText || null,
+          errorText:
+            details.errorText || null,
+          status:
+            details.status || "success",
+          startedAt:
+            details.startedAt || now,
+          finishedAt:
+            details.finishedAt || now,
+          durationMs:
+            Math.max(
+              0,
+              Math.round(
+                details.durationMs || 0
+              )
+            ),
+          metadata:
+            details.metadata || {}
+        }),
+        keepalive: true
+      }).catch(function () {
+        // Analytics must never interrupt processing.
+      });
+    }
+
+    sendMangaAnalytics({
+      eventId:
+        mangaAnalyticsEventId("page"),
+      requestType: "page_view",
+      requestText: "GET /",
+      resultText: "Processor page loaded",
+      status: "success"
+    });
+
 
     const uploadArea =
       document.getElementById("uploadArea");
@@ -2319,6 +2441,37 @@ const htmlContent = `<!DOCTYPE html>
 
       showProcessingScreen();
 
+      const analyticsEventId =
+        mangaAnalyticsEventId(
+          "weebcentral"
+        );
+      const analyticsStartedAt =
+        new Date().toISOString();
+      const analyticsStartedMs =
+        Date.now();
+      const analyticsRequest =
+        weebMangaTitle +
+        ": " +
+        selectedChapters
+          .map(function (chapter) {
+            return chapter.title;
+          })
+          .join(", ");
+      sendMangaAnalytics({
+        eventId: analyticsEventId,
+        requestType: "manga_download",
+        requestText: analyticsRequest,
+        resultText: "Processing started",
+        status: "received",
+        startedAt: analyticsStartedAt,
+        metadata: {
+          chapters:
+            selectedChapters.length,
+          sendToKindle:
+            sendToKindleForRun
+        }
+      });
+
 
       try {
 
@@ -2403,9 +2556,48 @@ const htmlContent = `<!DOCTYPE html>
           sendToKindleForRun
         );
 
+        sendMangaAnalytics({
+          eventId: analyticsEventId,
+          requestType: "manga_download",
+          requestText: analyticsRequest,
+          resultText:
+            outputCount +
+            " PDF files created",
+          status: "success",
+          startedAt: analyticsStartedAt,
+          finishedAt:
+            new Date().toISOString(),
+          durationMs:
+            Date.now() -
+            analyticsStartedMs,
+          metadata: {
+            chapters:
+              selectedChapters.length,
+            outputCount,
+            sendToKindle:
+              sendToKindleForRun
+          }
+        });
+
       } catch (error) {
 
         showProcessingError(error);
+
+        sendMangaAnalytics({
+          eventId: analyticsEventId,
+          requestType: "manga_download",
+          requestText: analyticsRequest,
+          errorText:
+            error.message ||
+            "Processing failed",
+          status: "error",
+          startedAt: analyticsStartedAt,
+          finishedAt:
+            new Date().toISOString(),
+          durationMs:
+            Date.now() -
+            analyticsStartedMs
+        });
 
       } finally {
 
@@ -2603,6 +2795,32 @@ const htmlContent = `<!DOCTYPE html>
 
       showProcessingScreen();
 
+      const analyticsEventId =
+        mangaAnalyticsEventId("upload");
+      const analyticsStartedAt =
+        new Date().toISOString();
+      const analyticsStartedMs =
+        Date.now();
+      const analyticsRequest =
+        selectedFiles
+          .map(function (file) {
+            return file.name;
+          })
+          .join(", ");
+      sendMangaAnalytics({
+        eventId: analyticsEventId,
+        requestType: "file_processing",
+        requestText: analyticsRequest,
+        resultText: "Processing started",
+        status: "received",
+        startedAt: analyticsStartedAt,
+        metadata: {
+          files: selectedFiles.length,
+          sendToKindle:
+            sendToKindleForRun
+        }
+      });
+
 
       try {
 
@@ -2670,9 +2888,47 @@ const htmlContent = `<!DOCTYPE html>
           sendToKindleForRun
         );
 
+        sendMangaAnalytics({
+          eventId: analyticsEventId,
+          requestType: "file_processing",
+          requestText: analyticsRequest,
+          resultText:
+            outputCount +
+            " PDF files created",
+          status: "success",
+          startedAt: analyticsStartedAt,
+          finishedAt:
+            new Date().toISOString(),
+          durationMs:
+            Date.now() -
+            analyticsStartedMs,
+          metadata: {
+            files: selectedFiles.length,
+            outputCount,
+            sendToKindle:
+              sendToKindleForRun
+          }
+        });
+
       } catch (error) {
 
         showProcessingError(error);
+
+        sendMangaAnalytics({
+          eventId: analyticsEventId,
+          requestType: "file_processing",
+          requestText: analyticsRequest,
+          errorText:
+            error.message ||
+            "Processing failed",
+          status: "error",
+          startedAt: analyticsStartedAt,
+          finishedAt:
+            new Date().toISOString(),
+          durationMs:
+            Date.now() -
+            analyticsStartedMs
+        });
 
 
         processBtn.disabled = false;
@@ -4452,7 +4708,8 @@ app.use("*", async (c, next) => {
   if (
     pathname.startsWith("/process") ||
     pathname.startsWith("/weebcentral/") ||
-    pathname.startsWith("/kindle/")
+    pathname.startsWith("/kindle/") ||
+    pathname.startsWith("/analytics/")
   ) {
     return c.json(
       { error: "Authentication required" },
@@ -4539,6 +4796,27 @@ app.get("/", (c) => {
     htmlContent
   );
 
+});
+
+
+app.post("/analytics/events", async (c) => {
+  try {
+    const body = await c.req.json();
+    await analyticsReporter.report(body);
+    return c.json(
+      { ok: true, eventId: body.eventId },
+      202
+    );
+  } catch (error) {
+    console.warn(
+      "Manga web analytics event failed",
+      error
+    );
+    return c.json(
+      { error: "Analytics event rejected" },
+      400
+    );
+  }
 });
 
 

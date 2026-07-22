@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "bun run index.ts",
-    "check": "node --input-type=module --check < index.ts && node --check pdf-merge-contract.mjs && node --check pdf-batch-writer.mjs && node --check pdf-utils.mjs && node --check processing-performance.mjs && node --check kindle-job-contract.mjs && node --check kindle-upload-contract.mjs && node --check kindle-filename.mjs && node --check weebcentral-cover.mjs && node --check weebcentral-image-fetch.mjs",
+    "check": "node --input-type=module --check < index.ts && node --check analytics-lockbox.mjs && node --check analytics-reporter.mjs && node --check pdf-merge-contract.mjs && node --check pdf-batch-writer.mjs && node --check pdf-utils.mjs && node --check processing-performance.mjs && node --check kindle-job-contract.mjs && node --check kindle-upload-contract.mjs && node --check kindle-filename.mjs && node --check weebcentral-cover.mjs && node --check weebcentral-image-fetch.mjs",
     "test": "node --test *.test.mjs"
   },
   "dependencies": {
