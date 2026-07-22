@@ -50,7 +50,7 @@ export class Orchestrator {
     this.tick().catch((error) => console.error("Initial worker tick failed", error));
   }
 
-  async handleMessage(message) {
+  async handleMessage(message, context = {}) {
     const chatId = String(message.chat?.id || "");
     const parsed = parseCommand(message.text || "");
     if (parsed.type === "help" || parsed.type === "unknown") {
@@ -74,11 +74,12 @@ export class Orchestrator {
         titleQuery: parsed.titleQuery,
         fromChapter: parsed.fromChapter,
         toChapter: parsed.toChapter,
+        analyticsEventId: context.analyticsEventId || null,
         mergeVerticalPages: this.store.getMergeVerticalPages(chatId),
         progress: "Ищу мангу"
       });
       await this.sendProgress(job.id, `⬇️ Начинаю скачивать ${parsed.titleQuery}: ${formatChapterRange(parsed.fromChapter, parsed.toChapter)}.`);
-      return;
+      return { deferred: true, jobId: job.id };
     }
   }
 
@@ -211,6 +212,7 @@ export class Orchestrator {
       if (latest?.status === "cancelled") return;
       const message = errorMessage(error);
       this.store.updateJob(initialJob.id, { status: "failed", error: message, progress: "Ошибка" });
+      this.completeAnalytics(latest || initialJob, "error", null, message);
       await this.sendProgress(initialJob.id, `❌ Не удалось скачать ${jobTitle(latest || initialJob)}: ${message}\n/retry — повторить.`);
     } finally {
       const latest = this.store.getJob(initialJob.id);
@@ -357,11 +359,13 @@ export class Orchestrator {
       if (entries.some((entry) => entry.status === "failed")) {
         const failed = entries.find((entry) => entry.status === "failed");
         this.store.updateJob(job.id, { status: "failed", kindleJobs: entries, error: failed.error || "Amazon rejected an EPUB" });
+        this.completeAnalytics(job, "error", null, failed.error || "Amazon rejected an EPUB");
         await this.sendProgress(job.id, `❌ Не удалось скачать ${jobTitle(job)}: Kindle не принял ${failed.filename}: ${failed.error || "неизвестная ошибка"}`);
         return;
       }
       if (entries.every((entry) => entry.status === "sent")) {
         this.store.updateJob(job.id, { status: "completed", kindleJobs: entries, progress: "Amazon принял все EPUB к доставке" });
+        this.completeAnalytics(job, "success", `Amazon принял ${entries.length} EPUB к доставке`);
         await this.sendProgress(job.id, `✅ Готово: Amazon принял ${entries.length} EPUB к доставке. Синхронизация с Kindle может занять время.`);
         await this.cleanupWorkspace(job.id);
         return;
@@ -407,6 +411,7 @@ export class Orchestrator {
   async cancel(chatId) {
     const job = this.store.cancelLatest(chatId);
     if (job) {
+      this.completeAnalytics(job, "cancelled", "Отменено пользователем");
       await this.sendProgress(job.id, `🛑 Скачивание ${jobTitle(job)} отменено. Уже переданные в Amazon файлы нельзя отозвать автоматически.`);
     } else {
       await this.telegram.sendMessage(chatId, "ℹ️ Нет активного задания для отмены.");
@@ -487,6 +492,29 @@ export class Orchestrator {
     } catch (error) {
       console.error("Telegram progress notification failed", error);
     }
+  }
+
+  completeAnalytics(job, status, resultText = null, errorText = null) {
+    if (!job?.analyticsEventId) return;
+    const existing = this.store.getAnalyticsEvent(job.analyticsEventId);
+    if (!existing) return;
+    const finishedAt = new Date().toISOString();
+    const durationMs = Math.max(0, new Date(finishedAt).valueOf() - new Date(existing.startedAt).valueOf());
+    this.store.upsertAnalyticsEvent({
+      eventId: job.analyticsEventId,
+      botId: "my_manga_kindle_bot",
+      status,
+      resultText,
+      errorText,
+      finishedAt,
+      durationMs,
+      metadata: {
+        jobId: job.id,
+        title: job.seriesTitle || job.titleQuery,
+        fromChapter: job.fromChapter,
+        toChapter: job.toChapter
+      }
+    });
   }
 }
 

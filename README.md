@@ -106,6 +106,15 @@ Secrets are never committed. The Yandex Cloud runtime stores the Telegram
 token, webhook secret, web application password and session token, Kindle
 shared secret, and Object Storage credentials.
 
+The `manga-bot-worker` also hosts the shared analytics service for all three
+Kindle bots. Authenticated producers upsert events through
+`POST /analytics/events`; the password-protected dashboard at `/analytics`
+shows daily request volume, unique users, errors, latency, per-bot and
+per-request-type charts, plus the exact request/result history. Analytics data
+is stored in the worker's existing persistent SQLite volume. Configure
+`ANALYTICS_INGEST_TOKEN`, `ANALYTICS_DASHBOARD_USERNAME`, and
+`ANALYTICS_DASHBOARD_PASSWORD` in the Yandex Cloud runtime environment.
+
 Each application's variables are documented in its `.env.example` file.
 The performance defaults can be tuned with
 `WEEBCENTRAL_IMAGE_CONCURRENCY`, `PDF_SERIALIZATION_BATCH_SIZE`,
