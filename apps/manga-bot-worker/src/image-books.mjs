@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import sharp from "sharp";
+
 import { boundedInteger, mapWithConcurrency } from "./concurrency.mjs";
 import { resolveEnglishChapterCover } from "./cover-resolver.mjs";
 import { buildFixedLayoutMangaEpub } from "./epub.mjs";
@@ -91,77 +93,99 @@ function operationSources(operation) {
   return sources;
 }
 
-// Keep each source image byte-for-byte. Re-encoding an already compressed
-// manga page at a nominally higher JPEG quality adds no detail and can make
-// Kindle files several times larger. The EPUB page layout composes spreads.
-async function prepareSingle(operation, mergeVerticalPages) {
+// Kindle's fixed-layout graphic-novel format requires JPEG content images.
+// Preserve JPEG inputs byte-for-byte, and transcode only PNG inputs once.
+async function preparePageImage(item, destinationDir, operationIndex, imageIndex) {
+  if (item.format === "jpg") {
+    const { size } = await fs.stat(item.filePath);
+    return {
+      filePath: item.filePath,
+      size,
+      info: { extension: "jpg", mediaType: "image/jpeg" }
+    };
+  }
+
+  const filePath = path.join(
+    destinationDir,
+    `page-${String(operationIndex + 1).padStart(6, "0")}-${imageIndex + 1}.jpg`
+  );
+  await sharp(item.filePath, { animated: false })
+    .flatten({ background: "#fff" })
+    .jpeg({ quality: 86, optimiseCoding: true, progressive: false })
+    .toFile(filePath);
+  const { size } = await fs.stat(filePath);
+  return {
+    filePath,
+    size,
+    info: { extension: "jpg", mediaType: "image/jpeg" }
+  };
+}
+
+async function prepareSingle(operation, mergeVerticalPages, destinationDir, operationIndex) {
   const item = operation.item;
-  const { size } = await fs.stat(item.filePath);
-  const info = item.format === "jpg"
-    ? { extension: "jpg", mediaType: "image/jpeg" }
-    : { extension: "png", mediaType: "image/png" };
+  const prepared = await preparePageImage(item, destinationDir, operationIndex, 0);
   if (mergeVerticalPages && item.isVertical) {
     return {
       width: item.width * 2,
       height: item.height,
-      size,
+      size: prepared.size,
       images: [{
-        filePath: item.filePath,
+        filePath: prepared.filePath,
         x: item.width,
         y: 0,
         width: item.width,
         height: item.height,
-        info
+        info: prepared.info
       }]
     };
   }
   return {
     width: item.width,
     height: item.height,
-    size,
+    size: prepared.size,
     images: [{
-      filePath: item.filePath,
+      filePath: prepared.filePath,
       x: 0,
       y: 0,
       width: item.width,
       height: item.height,
-      info
+      info: prepared.info
     }]
   };
 }
 
-async function preparePair(operation) {
+async function preparePair(operation, destinationDir, operationIndex) {
   const { first, second } = operation;
   const width = first.width + second.width;
   const height = Math.max(first.height, second.height);
-  const [firstStat, secondStat] = await Promise.all([
-    fs.stat(first.filePath),
-    fs.stat(second.filePath)
+  const [preparedFirst, preparedSecond] = await Promise.all([
+    preparePageImage(first, destinationDir, operationIndex, 0),
+    preparePageImage(second, destinationDir, operationIndex, 1)
   ]);
-  function pageImage(item, x, y) {
+  function pageImage(item, prepared, x, y) {
     return {
-      filePath: item.filePath,
+      filePath: prepared.filePath,
       x,
       y,
       width: item.width,
       height: item.height,
-      info: item.format === "jpg"
-        ? { extension: "jpg", mediaType: "image/jpeg" }
-        : { extension: "png", mediaType: "image/png" }
+      info: prepared.info
     };
   }
   return {
     width,
     height,
-    size: firstStat.size + secondStat.size,
+    size: preparedFirst.size + preparedSecond.size,
     images: [
       pageImage(
         second,
+        preparedSecond,
         0,
         Math.floor((height - second.height) / 2)
       ),
       pageImage(
         first,
+        preparedFirst,
         second.width,
         Math.floor((height - first.height) / 2)
       )
@@ -171,13 +195,15 @@ async function preparePair(operation) {
 
 async function prepareOperations({
   operations,
+  destinationDir,
   mergeVerticalPages,
   concurrency
 }) {
-  return mapWithConcurrency(operations, concurrency, async (operation) => {
+  await fs.mkdir(destinationDir, { recursive: true });
+  return mapWithConcurrency(operations, concurrency, async (operation, index) => {
     const layout = operation.type === "pair"
-      ? await preparePair(operation)
-      : await prepareSingle(operation, mergeVerticalPages);
+      ? await preparePair(operation, destinationDir, index)
+      : await prepareSingle(operation, mergeVerticalPages, destinationDir, index);
     return {
       ...layout,
       sources: operationSources(operation)
@@ -252,61 +278,69 @@ export async function buildKindleImageVolumes({
 
   await fs.rm(destinationDir, { recursive: true, force: true });
   await fs.mkdir(destinationDir, { recursive: true });
+  const preparedImageDir = path.join(destinationDir, ".prepared-images");
   const operations = buildImageOperations(sources, mergeVerticalPages);
   const prepared = await prepareOperations({
     operations,
+    destinationDir: preparedImageDir,
     mergeVerticalPages,
     concurrency: boundedInteger(imageRenderConcurrency, 2, { min: 1, max: 4 })
   });
   const groups = splitPreparedPages(prepared, maxBytes);
 
-  return mapWithConcurrency(
-    groups,
-    boundedInteger(epubBuildConcurrency, 2, { min: 1, max: 4 }),
-    async (pages, index) => {
-      const includedSources = uniqueSources(pages);
-      const fileName = volumeFileName(baseName, includedSources, index, groups.length);
-      const filePath = path.join(destinationDir, fileName);
-      const title = fileName.replace(/[.]epub$/i, "");
-      const cover = await resolveEnglishChapterCover({
-        title: baseName,
-        chapterLabel: includedSources[0]?.chapterTitle,
-        fallbackCoverPath: coverPath,
-        destinationDir,
-        index,
-        lookup: coverLookup
-      });
-      let size;
-      try {
-        size = await buildFixedLayoutMangaEpub({
-          outputPath: filePath,
-          title,
-          coverPath: cover.coverPath,
-          pageLayouts: pages.map((page) => ({
-            width: page.width,
-            height: page.height,
-            images: page.images
-          }))
+  let volumes;
+  try {
+    volumes = await mapWithConcurrency(
+      groups,
+      boundedInteger(epubBuildConcurrency, 2, { min: 1, max: 4 }),
+      async (pages, index) => {
+        const includedSources = uniqueSources(pages);
+        const fileName = volumeFileName(baseName, includedSources, index, groups.length);
+        const filePath = path.join(destinationDir, fileName);
+        const title = fileName.replace(/[.]epub$/i, "");
+        const cover = await resolveEnglishChapterCover({
+          title: baseName,
+          chapterLabel: includedSources[0]?.chapterTitle,
+          fallbackCoverPath: coverPath,
+          destinationDir,
+          index,
+          lookup: coverLookup
         });
-      } finally {
-        if (cover.temporary) await fs.rm(cover.coverPath, { force: true });
+        let size;
+        try {
+          size = await buildFixedLayoutMangaEpub({
+            outputPath: filePath,
+            title,
+            coverPath: cover.coverPath,
+            pageLayouts: pages.map((page) => ({
+              width: page.width,
+              height: page.height,
+              images: page.images
+            }))
+          });
+        } finally {
+          if (cover.temporary) await fs.rm(cover.coverPath, { force: true });
+        }
+        if (size > MAX_KINDLE_FILE_BYTES) {
+          throw new Error(`${fileName} exceeds the 200 MB Kindle upload limit`);
+        }
+        return {
+          fileName,
+          filePath,
+          size,
+          format: "epub",
+          oversize: false,
+          sources: includedSources.map((source) => source.name),
+          firstChapterTitle: includedSources[0]?.chapterTitle || null,
+          lastChapterTitle: includedSources.at(-1)?.chapterTitle || null,
+          coverChapterNumber: cover.chapterNumber,
+          coverVolume: cover.volume,
+          coverSource: cover.source
+        };
       }
-      if (size > MAX_KINDLE_FILE_BYTES) {
-        throw new Error(`${fileName} exceeds the 200 MB Kindle upload limit`);
-      }
-      return {
-        fileName,
-        filePath,
-        size,
-        format: "epub",
-        oversize: false,
-        sources: includedSources.map((source) => source.name),
-        firstChapterTitle: includedSources[0]?.chapterTitle || null,
-        lastChapterTitle: includedSources.at(-1)?.chapterTitle || null,
-        coverChapterNumber: cover.chapterNumber,
-        coverVolume: cover.volume,
-        coverSource: cover.source
-      };
-    }
-  );
+    );
+  } finally {
+    await fs.rm(preparedImageDir, { recursive: true, force: true });
+  }
+  return volumes;
 }

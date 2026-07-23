@@ -69,6 +69,9 @@ test("builds a fixed-layout manga EPUB with Kindle cover metadata", async () => 
     const firstPage = await zip.file("OEBPS/page-0001.xhtml").async("string");
     assert.match(firstPage, /width=120,height=200/);
     assert.match(firstPage, /<body epub:type="cover bodymatter">/);
+    assert.match(firstPage, /<img /);
+    assert.doesNotMatch(firstPage, /<svg|<image|<rect/);
+    assert.doesNotMatch(opf, /properties="svg"|page-spread-center/);
     const secondPage = await zip.file("OEBPS/page-0002.xhtml").async("string");
     assert.match(secondPage, /<body epub:type="bodymatter">/);
     assert.doesNotMatch(secondPage, /epub:type="cover/);

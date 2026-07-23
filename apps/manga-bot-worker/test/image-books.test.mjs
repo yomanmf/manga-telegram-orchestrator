@@ -40,7 +40,7 @@ test("preserves web pairing rules including chapter-boundary RTL pairs", () => {
   );
 });
 
-test("builds a covered EPUB from byte-identical source images without transcoding", async () => {
+test("builds a compact Kindle-compatible EPUB without recompressing JPEG inputs", async () => {
   const directory = `/tmp/manga-direct-epub-test-${Date.now()}-${Math.random()}`;
   const inputDir = path.join(directory, "input");
   await fs.mkdir(inputDir, { recursive: true });
@@ -93,35 +93,35 @@ test("builds a covered EPUB from byte-identical source images without transcodin
     .filter((name) => /^OEBPS\/page-[0-9]+[.]xhtml$/.test(name))
     .sort();
   const pageEntries = Object.keys(archive.files)
-    .filter((name) => /^OEBPS\/images\/page-[0-9]+(?:-[0-9]+)?[.](?:jpg|png)$/.test(name))
+    .filter((name) => /^OEBPS\/images\/page-[0-9]+(?:-[0-9]+)?[.]jpg$/.test(name))
     .sort();
   assert.equal(pageDocuments.length, 3);
   assert.equal(pageEntries.length, 4);
   const archivedBytes = await Promise.all(
     pageEntries.map((name) => archive.file(name).async("nodebuffer"))
   );
-  assert.deepEqual(
-    archivedBytes.map((bytes) => bytes.toString("base64")).sort(),
-    sourceBytes.map((bytes) => bytes.toString("base64")).sort()
-  );
-  assert.equal(
-    archivedBytes.reduce((total, bytes) => total + bytes.length, 0),
-    sourceBytes.reduce((total, bytes) => total + bytes.length, 0)
-  );
+  const sourceJpegs = sourceBytes.filter((_bytes, index) => formats[index] === "jpg");
+  for (const bytes of sourceJpegs) {
+    assert.ok(archivedBytes.some((archived) => archived.equals(bytes)));
+  }
+  assert.ok(archivedBytes.every((bytes) => imageInfo(bytes).mediaType === "image/jpeg"));
+  assert.ok(archivedBytes.every((bytes) => !bytes.equals(sourceBytes[1])));
   for (const bytes of archivedBytes) {
     const info = imageInfo(bytes);
     assert.deepEqual({ width: info.width, height: info.height }, { width: 10, height: 20 });
   }
   const firstPage = await archive.file(pageDocuments[0]).async("string");
   const pairedPage = await archive.file(pageDocuments[1]).async("string");
-  assert.match(firstPage, /viewBox="0 0 20 20"/);
-  assert.match(firstPage, /<image x="10" y="0" width="10" height="20"/);
-  assert.match(pairedPage, /viewBox="0 0 20 20"/);
-  assert.equal((pairedPage.match(/<image /g) || []).length, 2);
-  assert.match(pairedPage, /<image x="0" y="0" width="10" height="20"/);
-  assert.match(pairedPage, /<image x="10" y="0" width="10" height="20"/);
+  assert.doesNotMatch(firstPage, /<svg|<image|<rect/);
+  assert.match(firstPage, /<img [^>]*style="left:10px;top:0px;width:10px;height:20px"/);
+  assert.doesNotMatch(pairedPage, /<svg|<image|<rect/);
+  assert.equal((pairedPage.match(/<img /g) || []).length, 2);
+  assert.match(pairedPage, /style="left:0px;top:0px;width:10px;height:20px"/);
+  assert.match(pairedPage, /style="left:10px;top:0px;width:10px;height:20px"/);
+  const opf = await archive.file("OEBPS/content.opf").async("string");
+  assert.doesNotMatch(opf, /properties="svg"|media-type="image\/png"[^>]*page-image/);
   await assert.rejects(
-    fs.access(path.join(directory, "out", ".rendered-pages")),
+    fs.access(path.join(directory, "out", ".prepared-images")),
     /ENOENT/
   );
 });

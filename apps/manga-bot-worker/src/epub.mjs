@@ -192,14 +192,12 @@ function pageImageFileName(page, pageIndex, imageIndex) {
 function imagePageDocument(title, page, pageIndex, type) {
   const images = page.images.map((image, imageIndex) => {
     const href = `images/${pageImageFileName(page, pageIndex, imageIndex)}`;
-    return `<image x="${image.x}" y="${image.y}" width="${image.width}" height="${image.height}" preserveAspectRatio="none" xlink:href="${escapeXml(href)}" href="${escapeXml(href)}"/>`;
+    return `<img src="${escapeXml(href)}" alt="${escapeXml(`${title} - image ${imageIndex + 1}`)}" style="left:${image.x}px;top:${image.y}px;width:${image.width}px;height:${image.height}px"/>`;
   }).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html><html xmlns="${XHTML_NAMESPACE}" xmlns:epub="${EPUB_NAMESPACE}" lang="en"><head><title>${escapeXml(title)}</title>
-<meta name="viewport" content="width=${page.width},height=${page.height}"/><style>html,body,svg{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000}</style></head>
-<body${type ? ` epub:type="${type}"` : ""}><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 ${page.width} ${page.height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${escapeXml(title)}">
-<rect width="${page.width}" height="${page.height}" fill="#fff"/>
-${images}</svg></body></html>`;
+<meta name="viewport" content="width=${page.width},height=${page.height}"/><style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#fff}body{position:relative}img{position:absolute;display:block;margin:0;padding:0}</style></head>
+<body${type ? ` epub:type="${type}"` : ""}>${images}</body></html>`;
 }
 
 function navDocument(title) {
@@ -227,9 +225,9 @@ function packageDocument({ identifier, title, modifiedDate, cover, pages }) {
         : `${number}-${String(imageIndex + 1).padStart(2, "0")}`;
       return `<item id="page-image-${imageNumber}" href="images/${pageImageFileName(page, index, imageIndex)}" media-type="${image.mediaType}"/>`;
     }).join("");
-    return `${images}<item id="page-${number}" href="page-${number}.xhtml" media-type="application/xhtml+xml" properties="svg"/>`;
+    return `${images}<item id="page-${number}" href="page-${number}.xhtml" media-type="application/xhtml+xml"/>`;
   }).join("\n    ");
-  const spine = pages.map((_page, index) => `<itemref idref="page-${String(index + 1).padStart(4, "0")}" properties="page-spread-center"/>`).join("\n    ");
+  const spine = pages.map((_page, index) => `<itemref idref="page-${String(index + 1).padStart(4, "0")}"/>`).join("\n    ");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id" prefix="rendition: http://www.idpf.org/vocab/rendition/#">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="pub-id">${escapeXml(identifier)}</dc:identifier><dc:title>${escapeXml(title)}</dc:title><dc:creator>Manga</dc:creator><dc:language>en</dc:language><dc:publisher>manga-telegram-orchestrator</dc:publisher>
@@ -302,8 +300,7 @@ export async function buildFixedLayoutMangaEpub({
       for (const image of layout.images) {
         const info = image.info || imageInfo(await fs.readFile(image.filePath));
         const validFormat =
-          (info.extension === "jpg" && info.mediaType === "image/jpeg") ||
-          (info.extension === "png" && info.mediaType === "image/png");
+          info.extension === "jpg" && info.mediaType === "image/jpeg";
         if (
           !validFormat || !image.filePath ||
           !Number.isSafeInteger(image.x) || !Number.isSafeInteger(image.y) ||
