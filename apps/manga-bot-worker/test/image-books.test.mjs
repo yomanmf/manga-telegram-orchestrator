@@ -104,6 +104,10 @@ test("builds a covered EPUB from byte-identical source images without transcodin
     archivedBytes.map((bytes) => bytes.toString("base64")).sort(),
     sourceBytes.map((bytes) => bytes.toString("base64")).sort()
   );
+  assert.equal(
+    archivedBytes.reduce((total, bytes) => total + bytes.length, 0),
+    sourceBytes.reduce((total, bytes) => total + bytes.length, 0)
+  );
   for (const bytes of archivedBytes) {
     const info = imageInfo(bytes);
     assert.deepEqual({ width: info.width, height: info.height }, { width: 10, height: 20 });
