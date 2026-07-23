@@ -206,7 +206,7 @@ function navDocument(title) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html><html xmlns="${XHTML_NAMESPACE}" xmlns:epub="${EPUB_NAMESPACE}" lang="en"><head><title>${escapeXml(title)}</title></head><body>
 <nav epub:type="toc" id="toc"><h1>${escapeXml(title)}</h1><ol><li><a href="page-0001.xhtml">Start</a></li></ol></nav>
-<nav epub:type="landmarks" hidden="hidden"><ol><li><a epub:type="bodymatter" href="page-0001.xhtml">Beginning</a></li></ol></nav>
+<nav epub:type="landmarks" hidden="hidden"><ol><li><a epub:type="cover" href="page-0001.xhtml">Cover</a></li><li><a epub:type="bodymatter" href="page-0001.xhtml">Beginning</a></li></ol></nav>
 </body></html>`;
 }
 
@@ -240,7 +240,7 @@ function packageDocument({ identifier, title, modifiedDate, cover, pages }) {
   </manifest>
   <spine toc="ncx" page-progression-direction="rtl">${spine}
   </spine>
-  <guide><reference type="text" title="Beginning" href="page-0001.xhtml"/></guide>
+  <guide><reference type="cover" title="Cover" href="page-0001.xhtml"/><reference type="text" title="Beginning" href="page-0001.xhtml"/></guide>
 </package>`;
 }
 
@@ -362,7 +362,7 @@ export async function buildFixedLayoutMangaEpub({
     ...pages.flatMap((page, index) => {
       const number = String(index + 1).padStart(4, "0");
       return [
-        { name: `OEBPS/page-${number}.xhtml`, data: Buffer.from(imagePageDocument(`${title} - page ${index + 1}`, page, index, "bodymatter")) },
+        { name: `OEBPS/page-${number}.xhtml`, data: Buffer.from(imagePageDocument(`${title} - page ${index + 1}`, page, index, index === 0 ? "cover bodymatter" : "bodymatter")) },
         ...page.images.map((image, imageIndex) => ({
           name: `OEBPS/images/${pageImageFileName(page, index, imageIndex)}`,
           filePath: image.filePath,

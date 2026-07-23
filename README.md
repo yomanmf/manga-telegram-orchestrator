@@ -60,9 +60,10 @@ or an English volume cover is not available, the selected title's regular series
 cover is used as the fallback.
 The EPUB sets both EPUB 3 `cover-image` metadata and the legacy Kindle
 `meta name="cover"` entry, because a first PDF page alone is not a reliable
-Kindle library cover. The cover image is intentionally absent from the reading
-spine, so opening the book starts on the first manga page rather than a cover
-page.
+Kindle library cover. The portrait cover image is intentionally absent from the
+reading spine. Instead, the first manga spread is also marked as the internal
+cover and reading start, so Kindle opens on that landscape spread while retaining
+the portrait artwork as the library cover.
 The subprocess exits after packaging so the operating system reclaims PDF and
 image memory immediately, and the complete job workspace is removed after
 success, cancellation, or failure.
