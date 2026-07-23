@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  normalizeKindleDocumentFileName,
   normalizeKindlePdfFileName
 } from "./kindle-filename.mjs";
 
@@ -18,5 +19,12 @@ test("normalizes an existing PDF suffix without duplicating it", () => {
   assert.equal(
     normalizeKindlePdfFileName("Chapter 1.PDF"),
     "Chapter 1.pdf"
+  );
+});
+
+test("preserves EPUB filenames used for covered Kindle documents", () => {
+  assert.equal(
+    normalizeKindleDocumentFileName("Comic Vol. 2.epub"),
+    "Comic Vol. 2.epub"
   );
 });

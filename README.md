@@ -38,6 +38,13 @@ The web interface remains directly available through `manga-pdf-processor`
 and uses the same Kindle uploader. Browser uploads to the Kindle queue are sent
 in resumable 8 MiB chunks, so a network interruption resumes from the byte
 offset already stored by the uploader instead of restarting a 200 MB file.
+For uploaded PDF and CBZ comics, the optional title-name field enables automatic
+cover lookup for Send to Kindle. A generated document uses its first source
+filename to infer a chapter or volume, searches the
+English Apple Books and Open Library catalogs, and is delivered as a fixed-layout
+EPUB whose cover exists only in Kindle cover metadata, outside the reading spine.
+Downloaded PDFs are never changed by cover lookup. If no reliable match is
+available, the original PDF is sent unchanged.
 
 The Telegram path writes normalized chapter images to its per-job temporary
 workspace and creates right-to-left spreads directly with Sharp. It packages

@@ -7,7 +7,7 @@ import {
   nextKindleUploadRange
 } from "./kindle-upload-contract.mjs";
 import {
-  normalizeKindlePdfFileName
+  normalizeKindleDocumentFileName
 } from "./kindle-filename.mjs";
 import {
   parseWeebCentralCoverUrl
@@ -28,6 +28,13 @@ import {
 } from "./weebcentral-image-fetch.mjs";
 import { loadAnalyticsLockbox } from "./analytics-lockbox.mjs";
 import { createAnalyticsReporter } from "./analytics-reporter.mjs";
+import {
+  normalizeComicTitle,
+  resolveComicCover
+} from "./comic-cover-resolver.mjs";
+import {
+  buildCoveredKindleEpub
+} from "./kindle-cover-epub.mjs";
 
 await loadAnalyticsLockbox();
 const analyticsReporter = createAnalyticsReporter();
@@ -258,6 +265,13 @@ const htmlContent = `<!DOCTYPE html>
       margin: 8px 2px 0;
       color: #777;
       font-size: 11px;
+    }
+
+    .field-hint {
+      margin: 8px 2px 0;
+      color: #777;
+      font-size: 11px;
+      line-height: 1.4;
     }
 
     .weeb-suggestions {
@@ -681,6 +695,7 @@ const htmlContent = `<!DOCTYPE html>
           "title title"
           "subtitle subtitle"
           "upload weeb"
+          "cover weeb"
           "kindle weeb"
           "files weeb"
           "settings actions"
@@ -739,6 +754,10 @@ const htmlContent = `<!DOCTYPE html>
 
       .kindle-section {
         grid-area: kindle;
+      }
+
+      .cover-section {
+        grid-area: cover;
       }
 
       .weeb-section {
@@ -893,6 +912,28 @@ const htmlContent = `<!DOCTYPE html>
           class="file-count"
           id="fileCount"
         ></div>
+
+      </div>
+
+
+      <div class="settings-section cover-section">
+
+        <div class="settings-title">
+          Title name for cover lookup
+        </div>
+
+        <input
+          class="text-input"
+          id="comicTitle"
+          type="text"
+          maxlength="180"
+          placeholder="For example: One Piece"
+          autocomplete="off"
+        />
+
+        <div class="field-hint">
+          Optional. For Send to Kindle, a matching cover is stored in EPUB metadata without adding it to the comic pages. Downloaded PDFs are unchanged.
+        </div>
 
       </div>
 
@@ -1335,6 +1376,9 @@ const htmlContent = `<!DOCTYPE html>
 
     const fileCount =
       document.getElementById("fileCount");
+
+    const comicTitle =
+      document.getElementById("comicTitle");
 
     const processBtn =
       document.getElementById("processBtn");
@@ -2879,6 +2923,9 @@ const htmlContent = `<!DOCTYPE html>
 
       processBtn.disabled = true;
 
+      const coverTitle =
+        comicTitle.value.trim();
+
       showProcessingScreen();
 
       const analyticsEventId =
@@ -2903,7 +2950,9 @@ const htmlContent = `<!DOCTYPE html>
         metadata: {
           files: selectedFiles.length,
           sendToKindle:
-            sendToKindleForRun
+            sendToKindleForRun,
+          coverLookup:
+            Boolean(coverTitle)
         }
       });
 
@@ -2914,6 +2963,7 @@ const htmlContent = `<!DOCTYPE html>
           await processPdfSourceBatch({
             items: selectedFiles,
             sendToKindleForRun,
+            coverTitle,
             getProgressText:
               function (file, index) {
                 return (
@@ -2999,7 +3049,9 @@ const htmlContent = `<!DOCTYPE html>
             files: selectedFiles.length,
             outputCount,
             sendToKindle:
-              sendToKindleForRun
+              sendToKindleForRun,
+            coverLookup:
+              Boolean(coverTitle)
           }
         });
 
@@ -3043,7 +3095,8 @@ const htmlContent = `<!DOCTYPE html>
           finalZip,
           options.sendToKindleForRun,
           shouldMerge,
-          shouldUseRightToLeft
+          shouldUseRightToLeft,
+          options.coverTitle || ""
         );
 
 
@@ -3718,15 +3771,84 @@ const htmlContent = `<!DOCTYPE html>
     }
 
 
+    async function buildKindleDocumentWithCover(
+      pdfBytes,
+      title,
+      sourceName,
+      fileName,
+      rightToLeft
+    ) {
+
+      const formData =
+        new FormData();
+
+      formData.append(
+        "file",
+        new Blob(
+          [pdfBytes],
+          { type: "application/pdf" }
+        ),
+        fileName
+      );
+
+      formData.append("title", title);
+      formData.append("sourceName", sourceName);
+      formData.append(
+        "rightToLeft",
+        String(rightToLeft)
+      );
+
+      const response = await fetch(
+        "/covers/kindle-epub",
+        {
+          method: "POST",
+          body: formData
+        }
+      );
+
+      if (response.status === 204) {
+        return null;
+      }
+
+      if (!response.ok) {
+        const errorText =
+          await readErrorTextFromResponse(
+            response,
+            "Cover lookup failed"
+          );
+
+        throw new Error(errorText);
+      }
+
+      return {
+        bytes:
+          new Uint8Array(
+            await response.arrayBuffer()
+          ),
+        fileName:
+          fileName.replace(
+            /[.]pdf$/i,
+            ".epub"
+          ),
+        contentType:
+          "application/epub+zip"
+      };
+
+    }
+
+
     async function createPdfMergeCollector(
       zip,
       sendToKindleForRun,
       combineAcrossSources,
-      useRightToLeft
+      useRightToLeft,
+      coverTitle
     ) {
 
       const maxSize =
-        185 * 1024 * 1024;
+        sendToKindleForRun && coverTitle
+          ? 150 * 1024 * 1024
+          : 185 * 1024 * 1024;
 
       const operationTools =
         createPdfCollectorOperationTools(
@@ -3964,16 +4086,46 @@ const htmlContent = `<!DOCTYPE html>
             outputCount
           );
 
-
         if (sendToKindleForRun) {
+
+          let kindleDocument = {
+            fileName,
+            bytes: currentBytes,
+            contentType:
+              "application/pdf"
+          };
+
+          if (coverTitle) {
+
+            progressText.textContent =
+              "Preparing Kindle cover for: " +
+              fileName;
+
+            const coveredDocument =
+              await buildKindleDocumentWithCover(
+                currentBytes,
+                coverTitle,
+                currentSources[0] ||
+                  fileName,
+                fileName,
+                useRightToLeft
+              );
+
+            if (coveredDocument) {
+              kindleDocument =
+                coveredDocument;
+            }
+
+          }
 
           progressText.textContent =
             "Queueing for Kindle: " +
-            fileName;
+            kindleDocument.fileName;
 
-          await uploadPdfToKindle(
-            fileName,
-            currentBytes
+          await uploadDocumentToKindle(
+            kindleDocument.fileName,
+            kindleDocument.bytes,
+            kindleDocument.contentType
           );
 
         } else {
@@ -4158,15 +4310,16 @@ const htmlContent = `<!DOCTYPE html>
     }
 
 
-    async function uploadPdfToKindle(
+    async function uploadDocumentToKindle(
       fileName,
-      pdfBytes
+      documentBytes,
+      contentType
     ) {
 
       const blob = new Blob(
-        [pdfBytes],
+        [documentBytes],
         {
-          type: "application/pdf"
+          type: contentType
         }
       );
 
@@ -4220,7 +4373,7 @@ const htmlContent = `<!DOCTYPE html>
           progressText.textContent =
             (finalizing
               ? "Finalizing Kindle upload"
-              : "Uploading PDF to Kindle worker: " +
+              : "Uploading document to Kindle worker: " +
                 range.percent + "%") +
             " (chunk attempt " +
             attempt +
@@ -4243,12 +4396,12 @@ const htmlContent = `<!DOCTYPE html>
                 method: "PUT",
                 headers: {
                   "Content-Type":
-                    "application/pdf"
+                    contentType
                 },
                 body: blob.slice(
                   range.start,
                   range.end,
-                  "application/pdf"
+                  contentType
                 )
               }
             );
@@ -4283,7 +4436,7 @@ const htmlContent = `<!DOCTYPE html>
 
             lastUploadError = new Error(
               currentResult.error ||
-              "Cannot queue PDF for Kindle"
+              "Cannot queue document for Kindle"
             );
           } catch (error) {
             lastUploadError = error;
@@ -4353,7 +4506,7 @@ const htmlContent = `<!DOCTYPE html>
       if (!uploadResult) {
         throw lastUploadError ||
           new Error(
-            "Cannot queue PDF for Kindle"
+            "Cannot queue document for Kindle"
           );
       }
 
@@ -4824,6 +4977,7 @@ app.use("*", async (c, next) => {
 
   if (
     pathname.startsWith("/process") ||
+    pathname.startsWith("/covers/") ||
     pathname.startsWith("/weebcentral/") ||
     pathname.startsWith("/kindle/") ||
     pathname.startsWith("/analytics/")
@@ -5123,6 +5277,125 @@ app.get(
             "Cannot load WeebCentral series"
         },
         400
+      );
+
+    }
+
+  }
+);
+
+
+app.post(
+  "/covers/kindle-epub",
+  async (c) => {
+
+    try {
+
+      const formData =
+        await c.req.formData();
+
+      const file =
+        formData.get("file");
+
+      if (
+        !file ||
+        typeof file === "string"
+      ) {
+        throw createRouteError(
+          "Missing PDF file",
+          400
+        );
+      }
+
+      const title =
+        normalizeComicTitle(
+          formData.get("title") || ""
+        );
+
+      if (!title) {
+        return c.body(null, 204);
+      }
+
+      const sourceName =
+        String(
+          formData.get("sourceName") ||
+          file.name ||
+          "document.pdf"
+        ).slice(0, 260);
+
+      const cover =
+        await resolveComicCover({
+          title,
+          fileName: sourceName
+        });
+
+      if (!cover) {
+        return c.body(null, 204);
+      }
+
+      const epubBytes =
+        await buildCoveredKindleEpub({
+          pdfBytes:
+            Buffer.from(
+              await file.arrayBuffer()
+            ),
+          coverBytes: cover.bytes,
+          coverContentType:
+            cover.contentType,
+          title:
+            getBaseFileName(
+              file.name || sourceName
+            ),
+          rightToLeft:
+            formData.get(
+              "rightToLeft"
+            ) !== "false"
+        });
+
+      if (epubBytes.length > 200_000_000) {
+        throw createRouteError(
+          "Covered EPUB exceeds the 200 MB Kindle upload limit",
+          413
+        );
+      }
+
+      return c.body(
+        epubBytes,
+        {
+          headers: {
+            "Content-Type":
+              "application/epub+zip",
+            "Cache-Control":
+              "no-store",
+            "X-Cover-Source":
+              cover.source,
+            "X-Cover-Volume":
+              cover.volume || ""
+          }
+        }
+      );
+
+    } catch (error) {
+
+      const status =
+        getRouteErrorStatus(error);
+
+      if (status >= 500) {
+        console.error(
+          "Kindle EPUB cover error:",
+          error
+        );
+      }
+
+      return c.json(
+        {
+          error:
+            getRouteErrorMessage(
+              error,
+              "Cannot create covered Kindle EPUB"
+            )
+        },
+        status
       );
 
     }
@@ -5885,7 +6158,7 @@ async function createKindleUploadTicket(
         },
         body: JSON.stringify({
           filename:
-            normalizeKindlePdfFileName(
+            normalizeKindleDocumentFileName(
               filename ||
               "document.pdf"
             ),
