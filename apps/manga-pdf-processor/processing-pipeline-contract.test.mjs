@@ -17,3 +17,11 @@ test("uses bounded downloads, batched PDF checkpoints, and stored archives", () 
   assert.match(source, /writePdfBatches\(\{/);
   assert.match(source, /compression: "STORE"/);
 });
+
+test("lets web users choose manga or western-comic spread order", () => {
+  assert.match(source, /id="readingDirectionToggle"/);
+  assert.match(source, /role="switch"/);
+  assert.match(source, /Page order: Comics \(left to right\)/);
+  assert.match(source, /formData\.append\(\s*"shouldUseRightToLeft"/);
+  assert.match(source, /body\.shouldUseRightToLeft !== false/);
+});

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   bridgeChapterPages,
   rightToLeftPageOrder,
+  spreadPageOrder,
   splitOperationsBySize
 } from "./pdf-merge-contract.mjs";
 
@@ -17,6 +18,11 @@ const second = {
 assert.deepEqual(
   rightToLeftPageOrder(first, second),
   [second, first]
+);
+
+assert.deepEqual(
+  spreadPageOrder(first, second, false),
+  [first, second]
 );
 
 const bridge = bridgeChapterPages(first, second);

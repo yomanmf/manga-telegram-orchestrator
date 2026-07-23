@@ -20,6 +20,9 @@ import {
   writePdfBatches
 } from "./pdf-batch-writer.mjs";
 import {
+  spreadPageOrder
+} from "./pdf-merge-contract.mjs";
+import {
   fetchWeebCentralResponse,
   fetchWeebCentralImageBytes
 } from "./weebcentral-image-fetch.mjs";
@@ -371,6 +374,10 @@ const htmlContent = `<!DOCTYPE html>
       align-items: center;
 
       gap: 10px;
+    }
+
+    .toggle-option + .toggle-option {
+      margin-top: 10px;
     }
 
     .toggle-switch {
@@ -1036,6 +1043,25 @@ const htmlContent = `<!DOCTYPE html>
 
         </div>
 
+        <div class="toggle-option">
+
+          <div
+            class="toggle-switch active"
+            id="readingDirectionToggle"
+            role="switch"
+            tabindex="0"
+            aria-checked="true"
+            aria-label="Use manga right-to-left page order"
+          ></div>
+
+          <label class="toggle-label">
+            <span id="readingDirectionLabel">
+              Page order: Manga (right to left)
+            </span>
+          </label>
+
+        </div>
+
       </div>
 
 
@@ -1349,6 +1375,16 @@ const htmlContent = `<!DOCTYPE html>
     const mergeToggle =
       document.getElementById("mergeToggle");
 
+    const readingDirectionToggle =
+      document.getElementById(
+        "readingDirectionToggle"
+      );
+
+    const readingDirectionLabel =
+      document.getElementById(
+        "readingDirectionLabel"
+      );
+
     const kindleToggle =
       document.getElementById("kindleToggle");
 
@@ -1400,6 +1436,8 @@ const htmlContent = `<!DOCTYPE html>
 
     let shouldMerge = true;
 
+    let shouldUseRightToLeft = true;
+
     const kindlePreferenceKey =
       "mangaPdfProcessor.sendToKindle";
 
@@ -1442,6 +1480,53 @@ const htmlContent = `<!DOCTYPE html>
           "active",
           shouldMerge
         );
+
+      }
+    );
+
+
+    function toggleReadingDirection() {
+
+      shouldUseRightToLeft =
+        !shouldUseRightToLeft;
+
+      readingDirectionToggle.classList.toggle(
+        "active",
+        shouldUseRightToLeft
+      );
+
+      readingDirectionToggle.setAttribute(
+        "aria-checked",
+        String(shouldUseRightToLeft)
+      );
+
+      readingDirectionLabel.textContent =
+        shouldUseRightToLeft
+          ? "Page order: Manga (right to left)"
+          : "Page order: Comics (left to right)";
+
+    }
+
+
+    readingDirectionToggle.addEventListener(
+      "click",
+      toggleReadingDirection
+    );
+
+
+    readingDirectionToggle.addEventListener(
+      "keydown",
+      function (event) {
+
+        if (
+          event.key !== "Enter" &&
+          event.key !== " "
+        ) {
+          return;
+        }
+
+        event.preventDefault();
+        toggleReadingDirection();
 
       }
     );
@@ -2515,7 +2600,8 @@ const htmlContent = `<!DOCTYPE html>
                         chapter.title,
                       mangaTitle:
                         weebMangaTitle,
-                      shouldMerge
+                      shouldMerge,
+                      shouldUseRightToLeft
                     })
                   }
                 );
@@ -2854,6 +2940,13 @@ const htmlContent = `<!DOCTYPE html>
                   String(shouldMerge)
                 );
 
+                formData.append(
+                  "shouldUseRightToLeft",
+                  String(
+                    shouldUseRightToLeft
+                  )
+                );
+
                 return fetch(
                   "/process",
                   {
@@ -2949,7 +3042,8 @@ const htmlContent = `<!DOCTYPE html>
         await createPdfMergeCollector(
           finalZip,
           options.sendToKindleForRun,
-          shouldMerge
+          shouldMerge,
+          shouldUseRightToLeft
         );
 
 
@@ -3411,7 +3505,8 @@ const htmlContent = `<!DOCTYPE html>
 
 
     function createPdfCollectorOperationTools(
-      combineAcrossSources
+      combineAcrossSources,
+      useRightToLeft
     ) {
 
       function assertPageSize(
@@ -3464,7 +3559,10 @@ const htmlContent = `<!DOCTYPE html>
           spreadPage.drawPage(
             embeddedPage,
             {
-              x: item.width,
+              x:
+                useRightToLeft
+                  ? item.width
+                  : 0,
               y: 0,
               width: item.width,
               height: item.height
@@ -3542,26 +3640,43 @@ const htmlContent = `<!DOCTYPE html>
             pageHeight
           ]);
 
+        const left =
+          useRightToLeft
+            ? second
+            : first;
+        const right =
+          useRightToLeft
+            ? first
+            : second;
+        const embeddedLeft =
+          useRightToLeft
+            ? embeddedSecond
+            : embeddedFirst;
+        const embeddedRight =
+          useRightToLeft
+            ? embeddedFirst
+            : embeddedSecond;
+
         mergedPage.drawPage(
-          embeddedSecond,
+          embeddedLeft,
           {
             x: 0,
             y:
-              (pageHeight - second.height) /
+              (pageHeight - left.height) /
               2,
-            width: second.width,
-            height: second.height
+            width: left.width,
+            height: left.height
           }
         );
         mergedPage.drawPage(
-          embeddedFirst,
+          embeddedRight,
           {
-            x: second.width,
+            x: left.width,
             y:
-              (pageHeight - first.height) /
+              (pageHeight - right.height) /
               2,
-            width: first.width,
-            height: first.height
+            width: right.width,
+            height: right.height
           }
         );
 
@@ -3606,7 +3721,8 @@ const htmlContent = `<!DOCTYPE html>
     async function createPdfMergeCollector(
       zip,
       sendToKindleForRun,
-      combineAcrossSources
+      combineAcrossSources,
+      useRightToLeft
     ) {
 
       const maxSize =
@@ -3614,7 +3730,8 @@ const htmlContent = `<!DOCTYPE html>
 
       const operationTools =
         createPdfCollectorOperationTools(
-          combineAcrossSources
+          combineAcrossSources,
+          useRightToLeft
         );
 
       let currentPdf =
@@ -5173,7 +5290,8 @@ async function processWeebCentralChapterArchive(
       operations:
         buildOperations(
           images,
-          input.shouldMerge
+          input.shouldMerge,
+          input.shouldUseRightToLeft
         ),
       baseFileName:
         input.mangaTitle +
@@ -5256,7 +5374,9 @@ function getWeebCentralChapterArchiveInput(
       ),
     outputFormat,
     shouldMerge:
-      body.shouldMerge !== false
+      body.shouldMerge !== false,
+    shouldUseRightToLeft:
+      body.shouldUseRightToLeft !== false
   };
 
 }
@@ -5326,6 +5446,7 @@ async function processUploadedArchive(
     await processUploadedFile(
       input.file,
       input.shouldMerge,
+      input.shouldUseRightToLeft,
       session
     );
 
@@ -5377,7 +5498,11 @@ function getUploadedArchiveInput(
     shouldMerge:
       formData.get(
         "shouldMerge"
-      ) === "true"
+      ) === "true",
+    shouldUseRightToLeft:
+      formData.get(
+        "shouldUseRightToLeft"
+      ) !== "false"
   };
 
 }
@@ -5386,6 +5511,7 @@ function getUploadedArchiveInput(
 async function processUploadedFile(
   file,
   shouldMerge,
+  shouldUseRightToLeft,
   session
 ) {
 
@@ -5412,6 +5538,7 @@ async function processUploadedFile(
       inputBytes,
       baseFileName,
       shouldMerge,
+      shouldUseRightToLeft,
       session
     );
 
@@ -5426,6 +5553,7 @@ async function processUploadedFile(
       inputBytes,
       baseFileName,
       shouldMerge,
+      shouldUseRightToLeft,
       session
     );
 
@@ -6491,6 +6619,7 @@ async function processPdfFile(
   inputBytes,
   baseFileName,
   shouldMerge,
+  shouldUseRightToLeft,
   session
 ) {
 
@@ -6558,7 +6687,8 @@ async function processPdfFile(
   const operations =
     buildOperations(
       items,
-      shouldMerge
+      shouldMerge,
+      shouldUseRightToLeft
     );
 
 
@@ -6598,6 +6728,7 @@ async function processCbzFile(
   inputBytes,
   baseFileName,
   shouldMerge,
+  shouldUseRightToLeft,
   session
 ) {
 
@@ -6705,7 +6836,8 @@ async function processCbzFile(
   const operations =
     buildOperations(
       images,
-      shouldMerge
+      shouldMerge,
+      shouldUseRightToLeft
     );
 
 
@@ -6757,7 +6889,8 @@ function createSingleOperation(
 
 function createPairOperation(
   first,
-  second
+  second,
+  useRightToLeft
 ) {
 
   return {
@@ -6766,7 +6899,9 @@ function createPairOperation(
 
     first,
 
-    second
+    second,
+
+    useRightToLeft
 
   };
 
@@ -6801,7 +6936,8 @@ function shouldPairPageItems(
 
 function buildOperations(
   items,
-  shouldMerge
+  shouldMerge,
+  useRightToLeft = true
 ) {
 
   const operations = [];
@@ -6854,7 +6990,8 @@ function buildOperations(
       operations.push(
         createPairOperation(
           current,
-          next
+          next,
+          useRightToLeft
         )
       );
 
@@ -6939,10 +7076,11 @@ async function addSinglePdfPageOperation(
 }
 
 
-async function addPdfPairAsRightToLeftSpread(
+async function addPdfPairAsSpread(
   targetPdf,
   first,
-  second
+  second,
+  useRightToLeft
 ) {
 
   const pageWidth =
@@ -6983,43 +7121,59 @@ async function addPdfPairAsRightToLeftSpread(
     ]);
 
 
+  const [left, right] =
+    spreadPageOrder(
+      first,
+      second,
+      useRightToLeft
+    );
+
+
+  const [embeddedLeft, embeddedRight] =
+    spreadPageOrder(
+      embeddedFirst,
+      embeddedSecond,
+      useRightToLeft
+    );
+
+
   mergedPage.drawPage(
-    embeddedSecond,
+    embeddedLeft,
     {
       x: 0,
 
       y:
         (
           pageHeight -
-          second.height
+          left.height
         ) / 2,
 
       width:
-        second.width,
+        left.width,
 
       height:
-        second.height
+        left.height
     }
   );
 
 
   mergedPage.drawPage(
-    embeddedFirst,
+    embeddedRight,
     {
       x:
-        second.width,
+        left.width,
 
       y:
         (
           pageHeight -
-          first.height
+          right.height
         ) / 2,
 
       width:
-        first.width,
+        right.width,
 
       height:
-        first.height
+        right.height
     }
   );
 
@@ -7048,10 +7202,11 @@ async function addPdfOperation(
   }
 
 
-  await addPdfPairAsRightToLeftSpread(
+  await addPdfPairAsSpread(
     targetPdf,
     operation.first,
-    operation.second
+    operation.second,
+    operation.useRightToLeft
   );
 
 }
@@ -7099,10 +7254,11 @@ async function addSingleImagePageOperation(
 }
 
 
-async function addImagePairAsRightToLeftSpread(
+async function addImagePairAsSpread(
   targetPdf,
   first,
-  second
+  second,
+  useRightToLeft
 ) {
 
   const pageWidth =
@@ -7145,43 +7301,59 @@ async function addImagePairAsRightToLeftSpread(
     ]);
 
 
+  const [left, right] =
+    spreadPageOrder(
+      first,
+      second,
+      useRightToLeft
+    );
+
+
+  const [embeddedLeft, embeddedRight] =
+    spreadPageOrder(
+      embeddedFirst,
+      embeddedSecond,
+      useRightToLeft
+    );
+
+
   page.drawImage(
-    embeddedSecond,
+    embeddedLeft,
     {
       x: 0,
 
       y:
         (
           pageHeight -
-          second.height
+          left.height
         ) / 2,
 
       width:
-        second.width,
+        left.width,
 
       height:
-        second.height
+        left.height
     }
   );
 
 
   page.drawImage(
-    embeddedFirst,
+    embeddedRight,
     {
       x:
-        second.width,
+        left.width,
 
       y:
         (
           pageHeight -
-          first.height
+          right.height
         ) / 2,
 
       width:
-        first.width,
+        right.width,
 
       height:
-        first.height
+        right.height
     }
   );
 
@@ -7208,10 +7380,11 @@ async function addImageOperation(
   }
 
 
-  await addImagePairAsRightToLeftSpread(
+  await addImagePairAsSpread(
     targetPdf,
     operation.first,
-    operation.second
+    operation.second,
+    operation.useRightToLeft
   );
 
 }

@@ -1,5 +1,15 @@
+export function spreadPageOrder(
+  first,
+  second,
+  useRightToLeft = true
+) {
+  return useRightToLeft
+    ? [second, first]
+    : [first, second];
+}
+
 export function rightToLeftPageOrder(first, second) {
-  return [second, first];
+  return spreadPageOrder(first, second, true);
 }
 
 export function bridgeChapterPages(
