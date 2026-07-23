@@ -40,26 +40,31 @@ test("preserves web pairing rules including chapter-boundary RTL pairs", () => {
   );
 });
 
-test("builds a covered EPUB directly from images without intermediate PDFs", async () => {
+test("builds a covered EPUB from byte-identical source images without transcoding", async () => {
   const directory = `/tmp/manga-direct-epub-test-${Date.now()}-${Math.random()}`;
   const inputDir = path.join(directory, "input");
   await fs.mkdir(inputDir, { recursive: true });
   const colors = ["#f00", "#0f0", "#00f", "#ff0"];
+  const formats = ["jpg", "png", "jpg", "jpg"];
   const sources = [
     { name: "chapter-one", chapterTitle: "Chapter 1", pages: [] },
     { name: "chapter-two", chapterTitle: "Chapter 2", pages: [] }
   ];
+  const sourceBytes = [];
 
   for (let index = 0; index < colors.length; index += 1) {
-    const filePath = path.join(inputDir, `page-${index + 1}.jpg`);
-    await sharp({
+    const format = formats[index];
+    const filePath = path.join(inputDir, `page-${index + 1}.${format}`);
+    const image = sharp({
       create: { width: 10, height: 20, channels: 3, background: colors[index] }
-    }).jpeg().toFile(filePath);
+    });
+    await (format === "jpg" ? image.jpeg({ quality: 70 }) : image.png()).toFile(filePath);
+    sourceBytes.push(await fs.readFile(filePath));
     sources[Math.floor(index / 2)].pages.push({
       filePath,
       width: 10,
       height: 20,
-      format: "jpg"
+      format
     });
   }
 
@@ -84,17 +89,33 @@ test("builds a covered EPUB directly from images without intermediate PDFs", asy
   assert.equal(volume.format, "epub");
   assert.deepEqual(volume.sources, ["chapter-one", "chapter-two"]);
   const archive = await JSZip.loadAsync(await fs.readFile(volume.filePath));
-  const pageEntries = Object.keys(archive.files)
-    .filter((name) => /^OEBPS\/images\/page-[0-9]+[.]jpg$/.test(name))
+  const pageDocuments = Object.keys(archive.files)
+    .filter((name) => /^OEBPS\/page-[0-9]+[.]xhtml$/.test(name))
     .sort();
-  assert.equal(pageEntries.length, 3);
-  for (const name of pageEntries) {
-    const info = imageInfo(await archive.file(name).async("nodebuffer"));
-    assert.deepEqual(
-      { width: info.width, height: info.height },
-      { width: 20, height: 20 }
-    );
+  const pageEntries = Object.keys(archive.files)
+    .filter((name) => /^OEBPS\/images\/page-[0-9]+(?:-[0-9]+)?[.](?:jpg|png)$/.test(name))
+    .sort();
+  assert.equal(pageDocuments.length, 3);
+  assert.equal(pageEntries.length, 4);
+  const archivedBytes = await Promise.all(
+    pageEntries.map((name) => archive.file(name).async("nodebuffer"))
+  );
+  assert.deepEqual(
+    archivedBytes.map((bytes) => bytes.toString("base64")).sort(),
+    sourceBytes.map((bytes) => bytes.toString("base64")).sort()
+  );
+  for (const bytes of archivedBytes) {
+    const info = imageInfo(bytes);
+    assert.deepEqual({ width: info.width, height: info.height }, { width: 10, height: 20 });
   }
+  const firstPage = await archive.file(pageDocuments[0]).async("string");
+  const pairedPage = await archive.file(pageDocuments[1]).async("string");
+  assert.match(firstPage, /viewBox="0 0 20 20"/);
+  assert.match(firstPage, /<image x="10" y="0" width="10" height="20"/);
+  assert.match(pairedPage, /viewBox="0 0 20 20"/);
+  assert.equal((pairedPage.match(/<image /g) || []).length, 2);
+  assert.match(pairedPage, /<image x="0" y="0" width="10" height="20"/);
+  assert.match(pairedPage, /<image x="10" y="0" width="10" height="20"/);
   await assert.rejects(
     fs.access(path.join(directory, "out", ".rendered-pages")),
     /ENOENT/

@@ -181,12 +181,25 @@ export function imageInfo(buffer) {
   throw new Error("The Kindle cover is not a valid JPEG or PNG image");
 }
 
-function imagePageDocument(title, href, width, height, type) {
+function pageImageFileName(page, pageIndex, imageIndex) {
+  const pageNumber = String(pageIndex + 1).padStart(4, "0");
+  const imageNumber = page.images.length === 1
+    ? ""
+    : `-${String(imageIndex + 1).padStart(2, "0")}`;
+  return `page-${pageNumber}${imageNumber}.${page.images[imageIndex].extension}`;
+}
+
+function imagePageDocument(title, page, pageIndex, type) {
+  const images = page.images.map((image, imageIndex) => {
+    const href = `images/${pageImageFileName(page, pageIndex, imageIndex)}`;
+    return `<image x="${image.x}" y="${image.y}" width="${image.width}" height="${image.height}" preserveAspectRatio="none" xlink:href="${escapeXml(href)}" href="${escapeXml(href)}"/>`;
+  }).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html><html xmlns="${XHTML_NAMESPACE}" xmlns:epub="${EPUB_NAMESPACE}" lang="en"><head><title>${escapeXml(title)}</title>
-<meta name="viewport" content="width=${width},height=${height}"/><style>html,body,svg{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000}</style></head>
-<body${type ? ` epub:type="${type}"` : ""}><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${escapeXml(title)}">
-<image width="${width}" height="${height}" xlink:href="${escapeXml(href)}" href="${escapeXml(href)}"/></svg></body></html>`;
+<meta name="viewport" content="width=${page.width},height=${page.height}"/><style>html,body,svg{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000}</style></head>
+<body${type ? ` epub:type="${type}"` : ""}><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 ${page.width} ${page.height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${escapeXml(title)}">
+<rect width="${page.width}" height="${page.height}" fill="#fff"/>
+${images}</svg></body></html>`;
 }
 
 function navDocument(title) {
@@ -208,7 +221,13 @@ function packageDocument({ identifier, title, modifiedDate, cover, pages }) {
   const originalHeight = Math.max(...pages.map((page) => page.height));
   const pageManifest = pages.map((page, index) => {
     const number = String(index + 1).padStart(4, "0");
-    return `<item id="page-image-${number}" href="images/page-${number}.jpg" media-type="image/jpeg"/><item id="page-${number}" href="page-${number}.xhtml" media-type="application/xhtml+xml" properties="svg"/>`;
+    const images = page.images.map((image, imageIndex) => {
+      const imageNumber = page.images.length === 1
+        ? number
+        : `${number}-${String(imageIndex + 1).padStart(2, "0")}`;
+      return `<item id="page-image-${imageNumber}" href="images/${pageImageFileName(page, index, imageIndex)}" media-type="${image.mediaType}"/>`;
+    }).join("");
+    return `${images}<item id="page-${number}" href="page-${number}.xhtml" media-type="application/xhtml+xml" properties="svg"/>`;
   }).join("\n    ");
   const spine = pages.map((_page, index) => `<itemref idref="page-${String(index + 1).padStart(4, "0")}" properties="page-spread-center"/>`).join("\n    ");
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -260,23 +279,77 @@ export async function buildFixedLayoutMangaEpub({
   coverPath,
   pagePaths,
   pageInfos = null,
+  pageLayouts = null,
   modifiedDate = new Date().toISOString().slice(0, 10)
 }) {
-  if (!Array.isArray(pagePaths) || pagePaths.length === 0) throw new Error("Cannot create an empty manga EPUB");
+  if ((!Array.isArray(pagePaths) || pagePaths.length === 0) && (!Array.isArray(pageLayouts) || pageLayouts.length === 0)) {
+    throw new Error("Cannot create an empty manga EPUB");
+  }
+  if (pageLayouts && pagePaths) throw new Error("Manga EPUB pages must use paths or layouts, not both");
   const coverBytes = await fs.readFile(coverPath);
   const cover = imageInfo(coverBytes);
   const pages = [];
-  if (pageInfos && pageInfos.length !== pagePaths.length) {
-    throw new Error("Manga EPUB page metadata does not match the page list");
-  }
-  for (let index = 0; index < pagePaths.length; index += 1) {
-    const pagePath = pagePaths[index];
-    const info = pageInfos?.[index] || imageInfo(await fs.readFile(pagePath));
-    if (info.mediaType !== "image/jpeg") throw new Error("Rendered manga pages must be JPEG images");
-    if (!Number.isSafeInteger(info.width) || !Number.isSafeInteger(info.height) || info.width <= 0 || info.height <= 0) {
-      throw new Error("Rendered manga page dimensions are invalid");
+  if (pageLayouts) {
+    for (const layout of pageLayouts) {
+      if (
+        !Number.isSafeInteger(layout?.width) || !Number.isSafeInteger(layout?.height) ||
+        layout.width <= 0 || layout.height <= 0 ||
+        !Array.isArray(layout.images) || layout.images.length === 0
+      ) {
+        throw new Error("Manga EPUB page layout is invalid");
+      }
+      const images = [];
+      for (const image of layout.images) {
+        const info = image.info || imageInfo(await fs.readFile(image.filePath));
+        const validFormat =
+          (info.extension === "jpg" && info.mediaType === "image/jpeg") ||
+          (info.extension === "png" && info.mediaType === "image/png");
+        if (
+          !validFormat || !image.filePath ||
+          !Number.isSafeInteger(image.x) || !Number.isSafeInteger(image.y) ||
+          !Number.isSafeInteger(image.width) || !Number.isSafeInteger(image.height) ||
+          image.x < 0 || image.y < 0 || image.width <= 0 || image.height <= 0 ||
+          image.x + image.width > layout.width || image.y + image.height > layout.height
+        ) {
+          throw new Error("Manga EPUB page image layout is invalid");
+        }
+        images.push({
+          filePath: image.filePath,
+          x: image.x,
+          y: image.y,
+          width: image.width,
+          height: image.height,
+          extension: info.extension,
+          mediaType: info.mediaType
+        });
+      }
+      pages.push({ width: layout.width, height: layout.height, images });
     }
-    pages.push({ path: pagePath, ...info });
+  } else {
+    if (pageInfos && pageInfos.length !== pagePaths.length) {
+      throw new Error("Manga EPUB page metadata does not match the page list");
+    }
+    for (let index = 0; index < pagePaths.length; index += 1) {
+      const pagePath = pagePaths[index];
+      const info = pageInfos?.[index] || imageInfo(await fs.readFile(pagePath));
+      if (info.mediaType !== "image/jpeg") throw new Error("Rendered manga pages must be JPEG images");
+      if (!Number.isSafeInteger(info.width) || !Number.isSafeInteger(info.height) || info.width <= 0 || info.height <= 0) {
+        throw new Error("Rendered manga page dimensions are invalid");
+      }
+      pages.push({
+        width: info.width,
+        height: info.height,
+        images: [{
+          filePath: pagePath,
+          x: 0,
+          y: 0,
+          width: info.width,
+          height: info.height,
+          extension: info.extension,
+          mediaType: info.mediaType
+        }]
+      });
+    }
   }
   const identifier = `urn:uuid:${crypto.randomUUID()}`;
   const entries = [
@@ -289,8 +362,12 @@ export async function buildFixedLayoutMangaEpub({
     ...pages.flatMap((page, index) => {
       const number = String(index + 1).padStart(4, "0");
       return [
-        { name: `OEBPS/page-${number}.xhtml`, data: Buffer.from(imagePageDocument(`${title} - page ${index + 1}`, `images/page-${number}.jpg`, page.width, page.height, "bodymatter")) },
-        { name: `OEBPS/images/page-${number}.jpg`, filePath: page.path, compress: false }
+        { name: `OEBPS/page-${number}.xhtml`, data: Buffer.from(imagePageDocument(`${title} - page ${index + 1}`, page, index, "bodymatter")) },
+        ...page.images.map((image, imageIndex) => ({
+          name: `OEBPS/images/${pageImageFileName(page, index, imageIndex)}`,
+          filePath: image.filePath,
+          compress: false
+        }))
       ];
     })
   ];
