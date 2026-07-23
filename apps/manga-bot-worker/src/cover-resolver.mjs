@@ -63,23 +63,14 @@ function numeric(value) {
 export function volumeForChapter(aggregate, chapterNumber) {
   const target = numeric(chapterNumber);
   if (target === null) return null;
-  const candidates = [];
   for (const [volume, value] of Object.entries(aggregate?.volumes || {})) {
     if (numeric(volume) === null) continue;
     for (const chapter of Object.keys(value?.chapters || {})) {
       const number = numeric(chapter);
-      if (number !== null) candidates.push({ volume: String(volume), number });
+      if (number !== null && Math.abs(number - target) < 0.000001) return String(volume);
     }
   }
-  const exact = candidates.find((candidate) => Math.abs(candidate.number - target) < 0.000001);
-  if (exact) return exact.volume;
-  candidates.sort((left, right) => {
-    const distance = Math.abs(left.number - target) - Math.abs(right.number - target);
-    return distance || right.number - left.number;
-  });
-  return candidates[0] && Math.abs(candidates[0].number - target) <= 12
-    ? candidates[0].volume
-    : null;
+  return null;
 }
 
 function publicHttpsUrl(value) {
@@ -320,16 +311,128 @@ async function openLibraryCandidates({ fetchImpl, title, volume }) {
   return candidates;
 }
 
+function plainWikiHeading(value) {
+  return String(value || "")
+    .replace(/'{2,5}/g, "")
+    .replace(/\[\[(?:[^|\]]+[|])?([^\]]+)\]\]/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .trim();
+}
+
+function wikipediaSeriesSection(wikitext, title) {
+  const source = String(wikitext || "");
+  const requested = normalize(englishSearchTitle(title));
+  const headings = [...source.matchAll(/^==\s*([^=\n].*?[^=\n])\s*==\s*$/gm)];
+  const match = headings.find((heading) => normalize(plainWikiHeading(heading[1])) === requested);
+  if (!match) return source;
+  const start = match.index + match[0].length;
+  const next = headings.find((heading) => heading.index > match.index);
+  return source.slice(start, next?.index ?? source.length);
+}
+
+function chapterNumberFromWikiLine(line) {
+  const explicit = String(line || "").match(/^\s*\|\s*ChapterNumber\s*=\s*([^\n]+)/i);
+  const value = explicit?.[1] || String(line || "").match(/^\s*[*#]+\s*(.+)$/)?.[1];
+  if (!value) return null;
+  const match = value.match(/(?:^|[|'])\s*(?:chapter\s*)?(\d+(?:[.,]\d+)?)(?!\d)/i) ||
+    value.match(/^\s*(?:chapter\s*)?(\d+(?:[.,]\d+)?)(?!\d)/i);
+  return match ? numeric(match[1]) : null;
+}
+
+export function volumeFromWikipediaWikitext(wikitext, title, chapterNumber) {
+  const target = numeric(chapterNumber);
+  if (target === null) return null;
+  const section = wikipediaSeriesSection(wikitext, title);
+  let volume = null;
+  let inChapterList = false;
+  for (const line of section.split(/\r?\n/)) {
+    const volumeMatch = line.match(/^\s*\|\s*VolumeNumber\s*=\s*[^\d\n]*(\d+(?:[.,]\d+)?)/i);
+    if (volumeMatch) {
+      volume = String(volumeMatch[1]).replace(",", ".");
+      inChapterList = false;
+      continue;
+    }
+    if (/^\s*\|\s*ChapterList\s*=/i.test(line)) inChapterList = true;
+    if (!volume || (!inChapterList && !/^\s*\|\s*ChapterNumber\s*=/i.test(line))) continue;
+    const number = chapterNumberFromWikiLine(line);
+    if (number !== null && Math.abs(number - target) < 0.000001) return volume;
+  }
+  return null;
+}
+
+async function wikipediaWikitext(fetchImpl, page) {
+  const api = new URL("https://en.wikipedia.org/w/api.php");
+  api.searchParams.set("action", "parse");
+  api.searchParams.set("page", page);
+  api.searchParams.set("prop", "wikitext");
+  api.searchParams.set("format", "json");
+  api.searchParams.set("formatversion", "2");
+  const result = await json(fetchImpl, api);
+  return typeof result?.parse?.wikitext === "string" ? result.parse.wikitext : null;
+}
+
+function wikipediaSearchScore(page, title) {
+  const candidate = normalize(page);
+  const requested = normalize(englishSearchTitle(title));
+  const exact = normalize(`List of ${englishSearchTitle(title)} chapters`);
+  if (candidate === exact) return 1_000;
+  if (candidate.startsWith("list of ") && candidate.includes(requested) && candidate.includes("chapter")) return 500;
+  if (candidate.includes(requested) && candidate.includes("chapter")) return 250;
+  return 0;
+}
+
+async function resolveWikipediaVolume({ fetchImpl, title, chapterNumber }) {
+  const directPage = `List of ${englishSearchTitle(title)} chapters`;
+  const direct = await wikipediaWikitext(fetchImpl, directPage);
+  if (direct) {
+    const volume = volumeFromWikipediaWikitext(direct, title, chapterNumber);
+    if (volume) return volume;
+  }
+
+  const api = new URL("https://en.wikipedia.org/w/api.php");
+  api.searchParams.set("action", "query");
+  api.searchParams.set("list", "search");
+  api.searchParams.set("srsearch", `intitle:${JSON.stringify(englishSearchTitle(title))} chapters`);
+  api.searchParams.set("srnamespace", "0");
+  api.searchParams.set("srlimit", "10");
+  api.searchParams.set("srprop", "");
+  api.searchParams.set("format", "json");
+  api.searchParams.set("formatversion", "2");
+  const results = await json(fetchImpl, api);
+  const pages = (results?.query?.search || [])
+    .map((entry) => ({ title: entry?.title, score: wikipediaSearchScore(entry?.title, title) }))
+    .filter((entry) => entry.title && entry.score > 0 && entry.title !== directPage)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 3);
+  for (const page of pages) {
+    const wikitext = await wikipediaWikitext(fetchImpl, page.title);
+    const volume = volumeFromWikipediaWikitext(wikitext, title, chapterNumber);
+    if (volume) return volume;
+  }
+  return null;
+}
+
 export async function resolveMangaVolume({ fetchImpl = fetch, title, chapterNumber }) {
   const searchTitle = englishSearchTitle(title);
-  const search = new URL("https://api.mangadex.org/manga");
-  search.searchParams.set("title", searchTitle);
-  search.searchParams.set("limit", "10");
-  const results = await json(fetchImpl, search);
-  const manga = selectMangaDexSeries(results.data, searchTitle);
-  if (!manga?.id) return null;
-  const aggregate = await json(fetchImpl, `https://api.mangadex.org/manga/${encodeURIComponent(manga.id)}/aggregate`);
-  return volumeForChapter(aggregate, chapterNumber);
+  try {
+    const search = new URL("https://api.mangadex.org/manga");
+    search.searchParams.set("title", searchTitle);
+    search.searchParams.set("limit", "10");
+    const results = await json(fetchImpl, search);
+    const manga = selectMangaDexSeries(results.data, searchTitle);
+    if (manga?.id) {
+      const aggregate = await json(fetchImpl, `https://api.mangadex.org/manga/${encodeURIComponent(manga.id)}/aggregate`);
+      const exact = volumeForChapter(aggregate, chapterNumber);
+      if (exact) return exact;
+    }
+  } catch {
+    // MangaDex metadata is often incomplete or temporarily unavailable.
+  }
+  try {
+    return await resolveWikipediaVolume({ fetchImpl, title, chapterNumber });
+  } catch {
+    return null;
+  }
 }
 
 export async function resolveEnglishVolumeCover({ fetchImpl = fetch, title, volume }) {

@@ -8,7 +8,9 @@ import {
   englishSearchTitle,
   resolveEnglishChapterCover,
   resolveEnglishVolumeCover,
+  resolveMangaVolume,
   selectMangaDexSeries,
+  volumeFromWikipediaWikitext,
   volumeForChapter
 } from "../src/cover-resolver.mjs";
 
@@ -48,15 +50,86 @@ test("selects the exact manga and maps its first chapter to a volume", () => {
   }, "23"), "3");
 });
 
-test("uses a nearby chapter-volume anchor when an exact aggregate entry is missing", () => {
-  assert.equal(volumeForChapter({
-    volumes: {
-      "18": { chapters: { "195": {} } },
-      "19": { chapters: { "197": {} } },
-      "20": { chapters: { "207": {} } }
+test("uses only exact MangaDex chapter-volume matches", () => {
+  const aggregate = { volumes: { "19": { chapters: { "197": {} } } } };
+  assert.equal(volumeForChapter(aggregate, "197"), "19");
+  assert.equal(volumeForChapter(aggregate, "187"), null);
+  assert.equal(volumeForChapter(aggregate, "199"), null);
+});
+
+const THE_FABLE_WIKITEXT = `
+==''The Fable''==
+{{Graphic novel list
+|VolumeNumber = 17
+|ChapterList =
+*174. Playful Man
+*175. Gifted Man
+}}
+{{Graphic novel list
+|VolumeNumber = 18
+|ChapterList =
+*185. Fairy Tale Man
+*187. No-Going-Back Man
+}}
+{{Graphic novel list
+|VolumeNumber = 19
+|ChapterList =
+*196. Air Man
+*199. Flying Man
+}}
+{{Graphic novel list
+|VolumeNumber = 20
+|ChapterList =
+*207. Leaving Man
+*213. Pleading Woman
+}}
+{{Graphic novel list
+|VolumeNumber = 21
+|ChapterList =
+*218. Deceitful Man
+*226. Preparing Man
+}}
+{{Graphic novel list
+|VolumeNumber = 22
+|ChapterList =
+*229. Downed Man
+*239. Embarking Man
+}}
+==''The Fable: The Second Contact''==
+{{Graphic novel list
+|VolumeNumber = 1
+|ChapterList =
+*1. Thank-You Man
+*2. Chance Encounter Man
+}}
+`;
+
+test("maps The Fable file-start chapters to their exact book volumes", () => {
+  const chapters = [175, 187, 199, 213, 226, 239];
+  assert.deepEqual(
+    chapters.map((chapter) => volumeFromWikipediaWikitext(THE_FABLE_WIKITEXT, "The Fable", chapter)),
+    ["17", "18", "19", "20", "21", "22"]
+  );
+});
+
+test("falls back to a structured chapter list when MangaDex has only a nearby anchor", async () => {
+  const fetchImpl = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "api.mangadex.org" && url.pathname === "/manga") {
+      return jsonResponse({ data: [{ id: "the-fable", attributes: { title: { "ja-ro": "The Fable" } } }] });
     }
-  }, "201"), "19");
-  assert.equal(volumeForChapter({ volumes: { "1": { chapters: { "1": {} } } } }, "100"), null);
+    if (url.hostname === "api.mangadex.org" && url.pathname.endsWith("/aggregate")) {
+      return jsonResponse({ volumes: { "19": { chapters: { "197": {} } } } });
+    }
+    if (url.hostname === "en.wikipedia.org" && url.searchParams.get("action") === "parse") {
+      assert.equal(url.searchParams.get("page"), "List of The Fable chapters");
+      return jsonResponse({ parse: { wikitext: THE_FABLE_WIKITEXT } });
+    }
+    return new Response("", { status: 404 });
+  };
+
+  assert.equal(await resolveMangaVolume({ fetchImpl, title: "The Fable", chapterNumber: "175" }), "17");
+  assert.equal(await resolveMangaVolume({ fetchImpl, title: "The Fable", chapterNumber: "213" }), "20");
 });
 
 test("requests the exact English Apple Books cover at Kindle-quality resolution", async () => {
