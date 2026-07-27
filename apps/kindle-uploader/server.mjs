@@ -34,7 +34,7 @@ import {
   normalizeKindleDocumentFileName
 } from "./kindle-filename.mjs";
 import {
-  KINDLE_DOCUMENT_AUTHOR,
+  kindleDocumentAuthor,
   kindleDocumentTitle
 } from "./kindle-metadata.mjs";
 import { canRecycleIdleUploader } from "./idle-recycle.mjs";
@@ -263,6 +263,7 @@ app.post(
     const size = Number(req.body?.size);
     const batchId = normalizeBatchId(req.body?.batchId);
     const deferQueue = Boolean(req.body?.deferQueue);
+    const author = kindleDocumentAuthor(req.body?.author);
 
     if (deferQueue && !batchId) {
       res.status(400).json({
@@ -295,6 +296,7 @@ app.post(
       size,
       batchId,
       deferQueue,
+      author,
       receivedBytes: 0,
       partPath: path.join(TEMP_DIR, id + ".upload-part"),
       expiresAt
@@ -460,6 +462,7 @@ app.put("/upload/:id", async (req, res) => {
       contentType: ticket.contentType,
       size: ticket.size,
       batchId: ticket.batchId || null,
+      author: ticket.author,
       batchStartedAt: ticket.deferQueue
         ? null
         : ticket.batchId
@@ -614,6 +617,7 @@ async function finalizeResumableUpload(ticket) {
     contentType: ticket.contentType,
     size: ticket.size,
     batchId: ticket.batchId || null,
+    author: ticket.author,
     batchStartedAt: ticket.deferQueue
       ? null
       : ticket.batchId
@@ -1606,7 +1610,10 @@ async function ensureKindleFileDetails(page, jobs) {
     if (authorInput) {
       await authorInput.click();
       await authorInput.press("Control+A");
-      await authorInput.pressSequentially(KINDLE_DOCUMENT_AUTHOR, { delay: 5 });
+      await authorInput.pressSequentially(
+        kindleDocumentAuthor(job.author),
+        { delay: 5 }
+      );
       await authorInput.press("Tab");
     }
     const originalLayout = await firstVisibleLocator(
