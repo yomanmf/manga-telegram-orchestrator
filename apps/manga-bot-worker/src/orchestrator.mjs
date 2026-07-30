@@ -445,6 +445,7 @@ export class Orchestrator {
   }
 
   async sendKindleConnectUrl(chatId, job = null) {
+    if (job && isWebControlJob(job)) return;
     try {
       const result = await this.kindle.connectToken();
       const text = `🔐 ${job ? `Скачиваю ${jobTitle(job)}: ` : ""}Amazon требует вход. Откройте одноразовую ссылку в течение 10 минут:\n${result.url}`;
@@ -458,6 +459,8 @@ export class Orchestrator {
   }
 
   async sendProgress(jobId, text) {
+    const job = this.store.getJob(jobId);
+    if (job && isWebControlJob(job)) return;
     const previous = this.progressUpdates.get(jobId) || Promise.resolve();
     const update = previous
       .catch(() => {})
@@ -583,6 +586,7 @@ async function writeChapterCheckpoint(chapterDir, chapter, pages) {
 }
 
 function errorMessage(error) { return error instanceof Error ? error.message : String(error); }
+function isWebControlJob(job) { return String(job.chatId || "").startsWith("web:"); }
 function formatMegabytes(bytes) { return `${(Number(bytes) / 1_000_000).toFixed(1)} МБ`; }
 function jobTitle(job) { return job.seriesTitle || job.titleQuery; }
 function downloadProgress(job, progress) {

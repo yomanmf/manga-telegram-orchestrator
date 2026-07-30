@@ -7,6 +7,7 @@ import { boundedInteger } from "./concurrency.mjs";
 import { createKindleClient } from "./kindle-client.mjs";
 import { createMangaAppClient } from "./manga-app.mjs";
 import { Orchestrator } from "./orchestrator.mjs";
+import { registerControlRoutes } from "./control.mjs";
 import { createStore } from "./store.mjs";
 import { createTelegram } from "./telegram.mjs";
 import { isOwnerPrivateUpdate } from "./telegram-auth.mjs";
@@ -21,11 +22,13 @@ const missingConfiguration = requiredNames(config);
 const ready = missingConfiguration.length === 0;
 const store = ready ? createStore(config.dataDir) : null;
 const telegram = ready ? createTelegram(config.telegramToken) : null;
+const mangaApp = ready ? createMangaAppClient({ baseUrl: config.mangaAppUrl, sessionToken: config.mangaAppSessionToken }) : null;
+const kindle = ready ? createKindleClient({ baseUrl: config.kindleWorkerUrl, sharedSecret: config.kindleSharedSecret }) : null;
 const orchestrator = ready ? new Orchestrator({
   store,
   telegram,
-  mangaApp: createMangaAppClient({ baseUrl: config.mangaAppUrl, sessionToken: config.mangaAppSessionToken }),
-  kindle: createKindleClient({ baseUrl: config.kindleWorkerUrl, sharedSecret: config.kindleSharedSecret }),
+  mangaApp,
+  kindle,
   maxPdfBytes: config.maxPdfBytes,
   tempRoot: path.join(config.dataDir, "manga-jobs"),
   chapterProcessingConcurrency: config.chapterProcessingConcurrency,
@@ -43,6 +46,12 @@ if (store) {
     ingestToken: config.analyticsIngestToken,
     dashboardUsername: config.analyticsDashboardUsername,
     dashboardPassword: config.analyticsDashboardPassword
+  });
+  registerControlRoutes(app, {
+    store,
+    mangaApp,
+    kindle,
+    token: config.controlToken
   });
 }
 
@@ -142,6 +151,7 @@ function readConfig(env) {
     analyticsIngestToken: optional(env, "ANALYTICS_INGEST_TOKEN"),
     analyticsDashboardUsername: optional(env, "ANALYTICS_DASHBOARD_USERNAME"),
     analyticsDashboardPassword: optional(env, "ANALYTICS_DASHBOARD_PASSWORD"),
+    controlToken: optional(env, "MANGA_CONTROL_TOKEN") || optional(env, "ANALYTICS_INGEST_TOKEN"),
     maxPdfBytes: Number(env.MAX_PDF_BYTES || DEFAULT_MAX_PDF_BYTES),
     chapterProcessingConcurrency: boundedInteger(
       env.CHAPTER_PROCESSING_CONCURRENCY,

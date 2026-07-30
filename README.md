@@ -175,3 +175,9 @@ Available commands include `/status`, `/cancel`, `/retry`, `/kindle`,
 `/merge on`, and `/merge off`. `Merge vertical pages` is enabled by default and
 matches the web interface's PDF collector behavior, including right-to-left
 spreads and an empty left half for an unpaired vertical page.
+
+The ReKindle browser uses the authenticated `/control/{action}` service-to-service
+route (`search`, `series`, `create`, `status`, `cancel`, `retry`,
+`kindle-status`, and `kindle-connect`). It creates `web:rekindle` jobs directly;
+it does not synthesize bot updates or call the Telegram API. Set
+`MANGA_CONTROL_TOKEN`, or the existing analytics ingest token is reused.
