@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
 import { registerControlRoutes } from "../src/control.mjs";
 
@@ -73,4 +74,11 @@ test("does not expose Amazon authentication through web control", async () => {
   const { handler } = setup();
   assert.equal((await call(handler, "kindle-status")).status, 404);
   assert.equal((await call(handler, "kindle-connect")).status, 404);
+});
+
+test("web jobs reuse the server Kindle uploader without Telegram or email delivery", () => {
+  const source = fs.readFileSync(new URL("../src/orchestrator.mjs", import.meta.url), "utf8");
+  assert.match(source, /enqueueVolumes[\s\S]*?kindle\.startBatch/);
+  assert.match(source, /if \(job && isWebControlJob\(job\)\) return/);
+  assert.doesNotMatch(source, /nodemailer|SMTP|emailDelivery/);
 });

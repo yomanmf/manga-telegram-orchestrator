@@ -178,8 +178,8 @@ spreads and an empty left half for an unpaired vertical page.
 
 The ReKindle browser uses the authenticated `/control/{action}` service-to-service
 route (`search`, `series`, `create`, `status`, `cancel`, and `retry`). It creates
-`web:rekindle` jobs directly and emails their EPUB files through the existing
-Kindle SMTP destination, so the Kindle browser never opens Amazon authentication.
-Telegram jobs continue to use the Amazon uploader. Set `MANGA_CONTROL_TOKEN`, or
-the existing analytics ingest token is reused. Set `KINDLE_EMAIL_LOCKBOX_SECRET_ID`
-or the matching VM metadata attribute to the existing Kindle SMTP secret.
+`web:rekindle` jobs directly and sends them through the same server-side Amazon
+Send to Kindle uploader as Telegram jobs, without synthesizing bot updates or
+calling the Telegram API. The Kindle browser never opens Amazon authentication;
+the uploader uses its saved server session. Set `MANGA_CONTROL_TOKEN`, or the
+existing analytics ingest token is reused.
