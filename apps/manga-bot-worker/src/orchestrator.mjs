@@ -13,6 +13,7 @@ export class Orchestrator {
     telegram,
     mangaApp,
     kindle,
+    emailDelivery,
     maxPdfBytes,
     chapterProcessingConcurrency = 1,
     epubBuildConcurrency = 2,
@@ -23,6 +24,7 @@ export class Orchestrator {
     this.telegram = telegram;
     this.mangaApp = mangaApp;
     this.kindle = kindle;
+    this.emailDelivery = emailDelivery;
     this.maxPdfBytes = maxPdfBytes;
     this.chapterProcessingConcurrency = boundedInteger(
       chapterProcessingConcurrency,
@@ -124,8 +126,16 @@ export class Orchestrator {
     if (this.running) return;
     this.running = true;
     try {
-      const job = this.store.nextActiveJob();
+      let job = this.store.nextActiveJob();
       if (!job) return;
+      if (job.status === "waiting_auth" && isWebControlJob(job)) {
+        job = this.store.updateJob(job.id, {
+          status: "resume_pending",
+          kindleJobs: [],
+          error: null,
+          progress: "Переключаю доставку на email"
+        });
+      }
       if (job.status === "delivering" || job.status === "waiting_auth") {
         await this.reconcileDelivery(job);
       } else {
@@ -183,7 +193,7 @@ export class Orchestrator {
         sources: imageSources,
         destinationDir: path.join(workDir, "volumes"),
         baseName: job.seriesTitle,
-        maxBytes: this.maxPdfBytes,
+        maxBytes: isWebControlJob(job) ? this.emailDelivery.maxBytes : this.maxPdfBytes,
         mergeVerticalPages: job.mergeVerticalPages,
         coverPath,
         imageRenderConcurrency: this.epubBuildConcurrency,
@@ -191,6 +201,22 @@ export class Orchestrator {
       });
       if (volumes.some((volume) => volume.oversize)) {
         throw new Error("Одна часть превышает безопасный лимит Kindle; требуется разбиение исходной главы");
+      }
+
+      if (isWebControlJob(job)) {
+        await this.emailDelivery.deliver(volumes, job.seriesTitle);
+        const delivered = volumes.map((volume) => ({
+          filename: volume.fileName,
+          size: volume.size,
+          status: "sent"
+        }));
+        this.store.updateJob(job.id, {
+          status: "completed",
+          kindleJobs: delivered,
+          progress: "EPUB отправлены на Kindle по email"
+        });
+        this.completeAnalytics(job, "success", `Отправлено ${delivered.length} EPUB по email`);
+        return;
       }
 
       const batchId = job.id;

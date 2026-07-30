@@ -19,8 +19,6 @@ export function registerControlRoutes(app, { store, mangaApp, kindle, token }) {
       if (action === "status") return res.json(status(store, body));
       if (action === "cancel") return res.json(cancel(store));
       if (action === "retry") return res.json(retry(store));
-      if (action === "kindle-status") return res.json(await kindleStatus(kindle));
-      if (action === "kindle-connect") return res.json(await kindle.connectToken());
       res.status(404).json({ error: "Control action not found" });
     } catch (error) {
       res.status(error.status || 400).json({ error: error instanceof Error ? error.message : String(error) });
@@ -86,15 +84,6 @@ function cancel(store) {
 
 function retry(store) {
   return { job: publicJob(store.retryLatest(CONTROL_CHAT_ID)) };
-}
-
-async function kindleStatus(kindle) {
-  const result = await kindle.status();
-  return {
-    connected: result.connected === true,
-    sessionState: result.sessionState || "unknown",
-    counts: result.counts || {}
-  };
 }
 
 function publicJob(job) {

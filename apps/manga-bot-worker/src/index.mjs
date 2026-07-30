@@ -4,6 +4,7 @@ import path from "node:path";
 import { registerAnalyticsRoutes } from "./analytics.mjs";
 import { loadAnalyticsLockbox } from "./analytics-lockbox.mjs";
 import { boundedInteger } from "./concurrency.mjs";
+import { createEmailDelivery } from "./email-delivery.mjs";
 import { createKindleClient } from "./kindle-client.mjs";
 import { createMangaAppClient } from "./manga-app.mjs";
 import { Orchestrator } from "./orchestrator.mjs";
@@ -24,11 +25,13 @@ const store = ready ? createStore(config.dataDir) : null;
 const telegram = ready ? createTelegram(config.telegramToken) : null;
 const mangaApp = ready ? createMangaAppClient({ baseUrl: config.mangaAppUrl, sessionToken: config.mangaAppSessionToken }) : null;
 const kindle = ready ? createKindleClient({ baseUrl: config.kindleWorkerUrl, sharedSecret: config.kindleSharedSecret }) : null;
+const emailDelivery = ready ? createEmailDelivery(config.smtp) : null;
 const orchestrator = ready ? new Orchestrator({
   store,
   telegram,
   mangaApp,
   kindle,
+  emailDelivery,
   maxPdfBytes: config.maxPdfBytes,
   tempRoot: path.join(config.dataDir, "manga-jobs"),
   chapterProcessingConcurrency: config.chapterProcessingConcurrency,
@@ -152,6 +155,16 @@ function readConfig(env) {
     analyticsDashboardUsername: optional(env, "ANALYTICS_DASHBOARD_USERNAME"),
     analyticsDashboardPassword: optional(env, "ANALYTICS_DASHBOARD_PASSWORD"),
     controlToken: optional(env, "MANGA_CONTROL_TOKEN") || optional(env, "ANALYTICS_INGEST_TOKEN"),
+    smtp: {
+      host: optional(env, "SMTP_HOST"),
+      port: Number(env.SMTP_PORT || 465),
+      secure: String(env.SMTP_SECURE || "true").toLowerCase() !== "false",
+      user: optional(env, "SMTP_USER"),
+      pass: optional(env, "SMTP_PASS"),
+      from: optional(env, "SMTP_FROM"),
+      kindleEmail: optional(env, "KINDLE_EMAIL"),
+      maxBytes: Number(env.SMTP_MAX_BYTES || 20_000_000)
+    },
     maxPdfBytes: Number(env.MAX_PDF_BYTES || DEFAULT_MAX_PDF_BYTES),
     chapterProcessingConcurrency: boundedInteger(
       env.CHAPTER_PROCESSING_CONCURRENCY,
@@ -171,6 +184,12 @@ function readConfig(env) {
   };
   if (!Number.isFinite(config.maxPdfBytes) || config.maxPdfBytes < 10_000_000 || config.maxPdfBytes > MAX_ALLOWED_PDF_BYTES) {
     throw new Error("MAX_PDF_BYTES must be between 10 MB and 150 MB");
+  }
+  if (!Number.isInteger(config.smtp.port) || config.smtp.port < 1 || config.smtp.port > 65535) {
+    throw new Error("SMTP_PORT must be between 1 and 65535");
+  }
+  if (!Number.isFinite(config.smtp.maxBytes) || config.smtp.maxBytes < 1_000_000 || config.smtp.maxBytes > 25_000_000) {
+    throw new Error("SMTP_MAX_BYTES must be between 1 MB and 25 MB");
   }
   if (config.ownerUserId && (!/^\d+$/.test(config.ownerUserId) || !Number.isSafeInteger(Number(config.ownerUserId)) || Number(config.ownerUserId) <= 0)) {
     throw new Error("TELEGRAM_OWNER_USER_ID must be a positive Telegram user id");
@@ -194,8 +213,13 @@ function requiredNames(config) {
     ["mangaAppUrl", "MANGA_APP_URL"],
     ["mangaAppSessionToken", "MANGA_APP_SESSION_TOKEN"],
     ["kindleWorkerUrl", "KINDLE_WORKER_URL"],
-    ["kindleSharedSecret", "KINDLE_SHARED_SECRET"]
-  ].filter(([key]) => !config[key]).map(([, name]) => name);
+    ["kindleSharedSecret", "KINDLE_SHARED_SECRET"],
+    ["smtp.host", "SMTP_HOST"],
+    ["smtp.user", "SMTP_USER"],
+    ["smtp.pass", "SMTP_PASS"],
+    ["smtp.from", "SMTP_FROM"],
+    ["smtp.kindleEmail", "KINDLE_EMAIL"]
+  ].filter(([key]) => !key.split(".").reduce((value, part) => value?.[part], config)).map(([, name]) => name);
 }
 
 async function configureWebhook() {

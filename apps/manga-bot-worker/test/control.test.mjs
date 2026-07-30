@@ -25,7 +25,7 @@ function setup(overrides = {}) {
       async search() { return { results: [{ title: "The Fable", url: "https://weebcentral.com/series/0123456789ABCDEFGHJKMNPQRS" }] }; },
       async loadSeries(url) { return { title: "The Fable", chapters: [{ id: "chapter", title: "Chapter 1", index: 1 }], url }; }
     },
-    kindle: { async status() { return { connected: true, sessionState: "connected", counts: { queued: 0 } }; } },
+    kindle: {},
     ...overrides
   });
   return { handler, jobs };
@@ -67,4 +67,10 @@ test("rejects unauthenticated and reversed chapter requests", async () => {
   });
   assert.equal(response.status, 400);
   assert.match(response.body.error, /ending chapter/i);
+});
+
+test("does not expose Amazon authentication through web control", async () => {
+  const { handler } = setup();
+  assert.equal((await call(handler, "kindle-status")).status, 404);
+  assert.equal((await call(handler, "kindle-connect")).status, 404);
 });
