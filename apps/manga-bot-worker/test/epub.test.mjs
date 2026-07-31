@@ -6,8 +6,13 @@ import test from "node:test";
 
 import JSZip from "jszip";
 import { PDFDocument, rgb } from "pdf-lib";
+import sharp from "sharp";
 
-import { buildMangaEpubFromPdf, imageInfo } from "../src/epub.mjs";
+import {
+  buildFixedLayoutMangaEpub,
+  buildMangaEpubFromPdf,
+  imageInfo
+} from "../src/epub.mjs";
 
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -67,12 +72,15 @@ test("builds a fixed-layout manga EPUB with Kindle cover metadata", async () => 
     assert.ok(zip.file("OEBPS/images/page-0002.jpg"));
     assert.equal(zip.file("OEBPS/images/page-0003.jpg"), null);
     const firstPage = await zip.file("OEBPS/page-0001.xhtml").async("string");
-    assert.match(firstPage, /width=120,height=200/);
+    assert.match(firstPage, /width=240,height=200/);
+    assert.match(firstPage, /style="left:60px;top:0px;width:120px;height:200px"/);
     assert.match(firstPage, /<body epub:type="cover bodymatter">/);
     assert.match(firstPage, /<img /);
     assert.doesNotMatch(firstPage, /<svg|<image|<rect/);
     assert.doesNotMatch(opf, /properties="svg"|page-spread-center/);
     const secondPage = await zip.file("OEBPS/page-0002.xhtml").async("string");
+    assert.match(secondPage, /width=240,height=200/);
+    assert.match(secondPage, /style="left:0px;top:0px;width:240px;height:200px"/);
     assert.match(secondPage, /<body epub:type="bodymatter">/);
     assert.doesNotMatch(secondPage, /epub:type="cover/);
     const nav = await zip.file("OEBPS/nav.xhtml").async("string");
@@ -80,6 +88,47 @@ test("builds a fixed-layout manga EPUB with Kindle cover metadata", async () => 
     assert.match(nav, /epub:type="cover" href="page-0001[.]xhtml"/);
     assert.match(nav, /epub:type="bodymatter" href="page-0001[.]xhtml"/);
     assert.match(opf, /<reference type="cover" title="Cover" href="page-0001[.]xhtml"\/>/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("normalizes mixed Hunter x Hunter chapter resolutions", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "hunter-epub-test-"));
+  const imagePath = path.join(directory, "page.jpg");
+  const coverPath = path.join(directory, "cover.png");
+  const epubPath = path.join(directory, "hunter.epub");
+  await sharp(ONE_PIXEL_PNG).jpeg().toFile(imagePath);
+  await fs.writeFile(coverPath, ONE_PIXEL_PNG);
+  const image = (x, width, height) => ({
+    filePath: imagePath,
+    x,
+    y: 0,
+    width,
+    height,
+    info: { extension: "jpg", mediaType: "image/jpeg" }
+  });
+
+  try {
+    await buildFixedLayoutMangaEpub({
+      outputPath: epubPath,
+      title: "Hunter x Hunter (Color)",
+      coverPath,
+      pageLayouts: [
+        { width: 2026, height: 1600, images: [image(0, 1013, 1600), image(1013, 1013, 1600)] },
+        { width: 2400, height: 1800, images: [image(0, 1200, 1800), image(1200, 1200, 1800)] }
+      ]
+    });
+
+    const zip = await JSZip.loadAsync(await fs.readFile(epubPath));
+    const earlyPage = await zip.file("OEBPS/page-0001.xhtml").async("string");
+    const laterPage = await zip.file("OEBPS/page-0002.xhtml").async("string");
+    assert.match(earlyPage, /width=2400,height=1800/);
+    assert.match(earlyPage, /left:60[.]375px;top:0px;width:1139[.]625px;height:1800px/);
+    assert.match(earlyPage, /left:1200px;top:0px;width:1139[.]625px;height:1800px/);
+    assert.match(laterPage, /width=2400,height=1800/);
+    assert.match(laterPage, /left:0px;top:0px;width:1200px;height:1800px/);
+    assert.match(laterPage, /left:1200px;top:0px;width:1200px;height:1800px/);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

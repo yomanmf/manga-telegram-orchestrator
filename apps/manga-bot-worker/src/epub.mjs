@@ -189,14 +189,17 @@ function pageImageFileName(page, pageIndex, imageIndex) {
   return `page-${pageNumber}${imageNumber}.${page.images[imageIndex].extension}`;
 }
 
-function imagePageDocument(title, page, pageIndex, type) {
+function imagePageDocument(title, page, pageIndex, type, canvas) {
+  const scale = Math.min(canvas.width / page.width, canvas.height / page.height);
+  const offsetX = (canvas.width - page.width * scale) / 2;
+  const offsetY = (canvas.height - page.height * scale) / 2;
   const images = page.images.map((image, imageIndex) => {
     const href = `images/${pageImageFileName(page, pageIndex, imageIndex)}`;
-    return `<img src="${escapeXml(href)}" alt="${escapeXml(`${title} - image ${imageIndex + 1}`)}" style="left:${image.x}px;top:${image.y}px;width:${image.width}px;height:${image.height}px"/>`;
+    return `<img src="${escapeXml(href)}" alt="${escapeXml(`${title} - image ${imageIndex + 1}`)}" style="left:${offsetX + image.x * scale}px;top:${offsetY + image.y * scale}px;width:${image.width * scale}px;height:${image.height * scale}px"/>`;
   }).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html><html xmlns="${XHTML_NAMESPACE}" xmlns:epub="${EPUB_NAMESPACE}" lang="en"><head><title>${escapeXml(title)}</title>
-<meta name="viewport" content="width=${page.width},height=${page.height}"/><style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#fff}body{position:relative}img{position:absolute;display:block;margin:0;padding:0}</style></head>
+<meta name="viewport" content="width=${canvas.width},height=${canvas.height}"/><style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#fff}body{position:relative}img{position:absolute;display:block;margin:0;padding:0}</style></head>
 <body${type ? ` epub:type="${type}"` : ""}>${images}</body></html>`;
 }
 
@@ -214,9 +217,7 @@ function ncxDocument(identifier, title) {
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="${escapeXml(identifier)}"/></head><docTitle><text>${escapeXml(title)}</text></docTitle><navMap><navPoint id="start" playOrder="1"><navLabel><text>Start</text></navLabel><content src="page-0001.xhtml"/></navPoint></navMap></ncx>`;
 }
 
-function packageDocument({ identifier, title, modifiedDate, cover, pages }) {
-  const originalWidth = Math.max(...pages.map((page) => page.width));
-  const originalHeight = Math.max(...pages.map((page) => page.height));
+function packageDocument({ identifier, title, modifiedDate, cover, pages, canvas }) {
   const pageManifest = pages.map((page, index) => {
     const number = String(index + 1).padStart(4, "0");
     const images = page.images.map((image, imageIndex) => {
@@ -231,7 +232,7 @@ function packageDocument({ identifier, title, modifiedDate, cover, pages }) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id" prefix="rendition: http://www.idpf.org/vocab/rendition/#">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="pub-id">${escapeXml(identifier)}</dc:identifier><dc:title>${escapeXml(title)}</dc:title><dc:creator>Manga</dc:creator><dc:language>en</dc:language><dc:publisher>manga-telegram-orchestrator</dc:publisher>
-    <meta property="dcterms:modified">${escapeXml(`${modifiedDate}T00:00:00Z`)}</meta><meta property="rendition:layout">pre-paginated</meta><meta property="rendition:orientation">auto</meta><meta property="rendition:spread">none</meta><meta name="fixed-layout" content="true"/><meta name="original-resolution" content="${originalWidth}x${originalHeight}"/><meta name="primary-writing-mode" content="horizontal-rl"/><meta name="book-type" content="comic"/><meta name="cover" content="cover-image"/>
+    <meta property="dcterms:modified">${escapeXml(`${modifiedDate}T00:00:00Z`)}</meta><meta property="rendition:layout">pre-paginated</meta><meta property="rendition:orientation">auto</meta><meta property="rendition:spread">none</meta><meta name="fixed-layout" content="true"/><meta name="original-resolution" content="${canvas.width}x${canvas.height}"/><meta name="primary-writing-mode" content="horizontal-rl"/><meta name="book-type" content="comic"/><meta name="cover" content="cover-image"/>
   </metadata>
   <manifest><item id="cover-image" href="images/cover.${cover.extension}" media-type="${cover.mediaType}" properties="cover-image"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
     ${pageManifest}
@@ -348,18 +349,22 @@ export async function buildFixedLayoutMangaEpub({
       });
     }
   }
+  const canvas = {
+    width: Math.max(...pages.map((page) => page.width)),
+    height: Math.max(...pages.map((page) => page.height))
+  };
   const identifier = `urn:uuid:${crypto.randomUUID()}`;
   const entries = [
     { name: "mimetype", data: Buffer.from(EPUB_MIMETYPE), compress: false },
     { name: "META-INF/container.xml", data: Buffer.from(`<?xml version="1.0" encoding="UTF-8"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`) },
-    { name: "OEBPS/content.opf", data: Buffer.from(packageDocument({ identifier, title, modifiedDate, cover, pages })) },
+    { name: "OEBPS/content.opf", data: Buffer.from(packageDocument({ identifier, title, modifiedDate, cover, pages, canvas })) },
     { name: "OEBPS/nav.xhtml", data: Buffer.from(navDocument(title)) },
     { name: "OEBPS/toc.ncx", data: Buffer.from(ncxDocument(identifier, title)) },
     { name: `OEBPS/images/cover.${cover.extension}`, filePath: coverPath, compress: false },
     ...pages.flatMap((page, index) => {
       const number = String(index + 1).padStart(4, "0");
       return [
-        { name: `OEBPS/page-${number}.xhtml`, data: Buffer.from(imagePageDocument(`${title} - page ${index + 1}`, page, index, index === 0 ? "cover bodymatter" : "bodymatter")) },
+        { name: `OEBPS/page-${number}.xhtml`, data: Buffer.from(imagePageDocument(`${title} - page ${index + 1}`, page, index, index === 0 ? "cover bodymatter" : "bodymatter", canvas)) },
         ...page.images.map((image, imageIndex) => ({
           name: `OEBPS/images/${pageImageFileName(page, index, imageIndex)}`,
           filePath: image.filePath,
