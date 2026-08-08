@@ -18,6 +18,10 @@ test("uses bounded downloads, batched PDF checkpoints, and stored archives", () 
   assert.match(source, /compression: "STORE"/);
 });
 
+test("accepts current relative WeebCentral chapter links", () => {
+  assert.ok(source.includes(String.raw`(?:https:\/\/weebcentral\.com)?\/chapters\/`));
+});
+
 test("lets web users choose manga or western-comic spread order", () => {
   assert.match(source, /id="readingDirectionToggle"/);
   assert.match(source, /role="switch"/);

@@ -6484,7 +6484,7 @@ function parseWeebCentralChapters(
   const chapters = [];
 
   const chapterPattern =
-    /href="https:\/\/weebcentral\.com\/chapters\/([0-9A-HJKMNP-TV-Z]{26})"[\s\S]*?<span class="">\s*([^<]+?)\s*<\/span>[\s\S]*?<time[^>]*datetime="([^"]*)"/gi;
+    /href="(?:https:\/\/weebcentral\.com)?\/chapters\/([0-9A-HJKMNP-TV-Z]{26})"[\s\S]*?<span class="">\s*([^<]+?)\s*<\/span>[\s\S]*?<time[^>]*datetime="([^"]*)"/gi;
 
   let chapterMatch;
 
