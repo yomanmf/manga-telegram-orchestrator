@@ -360,6 +360,19 @@ export function volumeFromWikipediaWikitext(wikitext, title, chapterNumber) {
   return null;
 }
 
+export function isbnForVolumeFromWikipediaWikitext(wikitext, volume) {
+  const target = numeric(volume);
+  let currentVolume = null;
+  for (const line of String(wikitext || "").split(/\r?\n/)) {
+    const volumeMatch = line.match(/^\s*\|\s*VolumeNumber\s*=\s*[^\d\n]*(\d+(?:[.,]\d+)?)/i);
+    if (volumeMatch) currentVolume = numeric(volumeMatch[1]);
+    if (currentVolume === null || target === null || Math.abs(currentVolume - target) >= 0.000001) continue;
+    const isbn = line.match(/^\s*\|\s*ISBN\s*=\s*([^\n]+)/i)?.[1].replace(/[^\dX]/gi, "");
+    if (/^978409\d{7}$/.test(isbn || "")) return isbn;
+  }
+  return null;
+}
+
 async function wikipediaWikitext(fetchImpl, page) {
   const api = new URL("https://en.wikipedia.org/w/api.php");
   api.searchParams.set("action", "parse");
@@ -369,6 +382,18 @@ async function wikipediaWikitext(fetchImpl, page) {
   api.searchParams.set("formatversion", "2");
   const result = await json(fetchImpl, api);
   return typeof result?.parse?.wikitext === "string" ? result.parse.wikitext : null;
+}
+
+async function originalPublisherCover({ fetchImpl, title, volume }) {
+  const wikitext = await wikipediaWikitext(fetchImpl, englishSearchTitle(title));
+  const isbn = isbnForVolumeFromWikipediaWikitext(wikitext, volume);
+  if (!isbn) return null;
+  const jdcn = `${isbn.slice(4, -1)}0000d0000000`;
+  const image = await downloadImage(
+    fetchImpl,
+    `https://shogakukan-comic.jp/book-images/w400/digital/${jdcn}.jpg`
+  );
+  return { ...image, source: "Shogakukan (original edition)" };
 }
 
 function wikipediaSearchScore(page, title) {
@@ -470,7 +495,12 @@ export async function resolveEnglishVolumeCover({ fetchImpl = fetch, title, volu
       // Try the next exact English-edition cover.
     }
   }
-  return best;
+  if (best) return best;
+  try {
+    return await originalPublisherCover({ fetchImpl, title, volume });
+  } catch {
+    return null;
+  }
 }
 
 export async function resolveEnglishChapterCover({

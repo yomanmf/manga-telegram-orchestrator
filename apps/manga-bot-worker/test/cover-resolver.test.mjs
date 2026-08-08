@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   englishSearchTitle,
+  isbnForVolumeFromWikipediaWikitext,
   resolveEnglishChapterCover,
   resolveEnglishVolumeCover,
   resolveMangaVolume,
@@ -110,6 +111,36 @@ test("maps The Fable file-start chapters to their exact book volumes", () => {
     chapters.map((chapter) => volumeFromWikipediaWikitext(THE_FABLE_WIKITEXT, "The Fable", chapter)),
     ["17", "18", "19", "20", "21", "22"]
   );
+});
+
+test("uses the original Shogakukan volume cover when no English edition exists", async () => {
+  const wikitext = `
+{{Graphic novel list
+|VolumeNumber = 7
+|ISBN = 978-4-09-183769-1
+}}`;
+  assert.equal(isbnForVolumeFromWikipediaWikitext(wikitext, "7"), "9784091837691");
+
+  const coverBytes = pngWithDimensions(400, 567, "shogakukan-volume-7");
+  const fetchImpl = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "itunes.apple.com") return jsonResponse({ results: [] });
+    if (url.hostname === "kodansha.us") return new Response("", { status: 404 });
+    if (url.hostname === "openlibrary.org") return jsonResponse({ docs: [] });
+    if (url.hostname === "en.wikipedia.org") {
+      assert.equal(url.searchParams.get("page"), "Nozoki Ana");
+      return jsonResponse({ parse: { wikitext } });
+    }
+    if (url.hostname === "shogakukan-comic.jp") {
+      assert.equal(url.pathname, "/book-images/w400/digital/091837690000d0000000.jpg");
+      return new Response(coverBytes, { status: 200, headers: { "Content-Type": "image/png" } });
+    }
+    return new Response("", { status: 404 });
+  };
+
+  const cover = await resolveEnglishVolumeCover({ fetchImpl, title: "Nozoki Ana", volume: "7" });
+  assert.equal(cover.source, "Shogakukan (original edition)");
+  assert.deepEqual(cover.bytes, coverBytes);
 });
 
 test("falls back to a structured chapter list when MangaDex has only a nearby anchor", async () => {
