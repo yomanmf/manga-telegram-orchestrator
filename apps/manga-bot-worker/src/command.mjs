@@ -1,4 +1,6 @@
 const SEND_PATTERNS = [
+  /^(.+?)\s+главы\s+с\s+([\d.,]+)\s+по\s+([\d.,]+)$/i,
+  /^(.+?)\s+глава\s+([\d.,]+)$/i,
   /^(?:отправь|пришли|скинь)\s+(?:мне\s+)?(?:на\s+kindle\s+)?(.+?)\s+с\s+(?:главы\s+)?([\d.,]+)\s+(?:до|по)\s+(?:самой\s+)?((?:последней(?:\s+главы)?)|latest|[\d.,]+)$/i,
   /^(?:send)\s+(.+?)\s+(?:from)\s+(?:chapter\s+)?([\d.]+)\s+(?:to)\s+((?:latest|last)|[\d.]+)$/i
 ];
@@ -28,7 +30,7 @@ export function parseCommand(text) {
       const fromChapter = normalizeChapterNumber(match[2]);
       const toChapter = /^(?:последней(?:\s+главы)?|latest|last)$/i.test(match[3])
         ? "latest"
-        : normalizeChapterNumber(match[3]);
+        : normalizeChapterNumber(match[3] ?? match[2]);
       if (toChapter !== "latest" && Number(toChapter) < Number(fromChapter)) {
         throw new Error("Конечная глава не может быть меньше начальной");
       }

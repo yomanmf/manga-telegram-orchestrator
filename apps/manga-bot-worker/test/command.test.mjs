@@ -28,6 +28,15 @@ test("parses Russian Kindle range command", () => {
   });
 });
 
+test("parses concise Russian chapter commands", () => {
+  assert.deepEqual(parseCommand("One Piece глава 1"), {
+    type: "send", titleQuery: "One Piece", fromChapter: "1", toChapter: "1"
+  });
+  assert.deepEqual(parseCommand("One Piece главы с 10 по 11"), {
+    type: "send", titleQuery: "One Piece", fromChapter: "10", toChapter: "11"
+  });
+});
+
 test("parses an inclusive numeric chapter range with parentheses in the title", () => {
   assert.deepEqual(parseCommand("Отправь One Piece (Color) с 23 до 100"), {
     type: "send",
