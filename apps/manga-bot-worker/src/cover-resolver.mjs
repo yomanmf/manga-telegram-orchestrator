@@ -13,6 +13,7 @@ const ENGLISH_PUBLISHERS = [
   "vertical", "square enix", "j-novel", "denpa", "tokyopop", "mangamo"
 ];
 const NON_SINGLE_VOLUME_WORDS = /\b(?:omnibus|3-in-1|box set|coloring book|collector(?:'s)? edition)\b/i;
+const JSON_CACHE = new Map();
 
 function normalize(value) {
   return String(value || "")
@@ -63,14 +64,24 @@ function numeric(value) {
 export function volumeForChapter(aggregate, chapterNumber) {
   const target = numeric(chapterNumber);
   if (target === null) return null;
+  const matches = [];
   for (const [volume, value] of Object.entries(aggregate?.volumes || {})) {
     if (numeric(volume) === null) continue;
     for (const chapter of Object.keys(value?.chapters || {})) {
       const number = numeric(chapter);
-      if (number !== null && Math.abs(number - target) < 0.000001) return String(volume);
+      if (number !== null && Math.abs(number - target) < 0.000001) matches.push(String(volume));
     }
   }
-  return null;
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function globallyNumberedAggregate(aggregate) {
+  const volumes = Object.entries(aggregate?.volumes || {})
+    .filter(([volume]) => numeric(volume) !== null);
+  const chapters = volumes.flatMap(([, value]) =>
+    Object.keys(value?.chapters || {}).map(numeric).filter((number) => number !== null)
+  );
+  return chapters.length > 0 && Math.max(...chapters) > volumes.length;
 }
 
 function publicHttpsUrl(value) {
@@ -89,20 +100,47 @@ function publicHttpsUrl(value) {
 }
 
 async function request(fetchImpl, url, options = {}) {
-  return fetchImpl(url, {
-    ...options,
-    signal: options.signal || AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    headers: {
-      "User-Agent": "manga-telegram-orchestrator/0.1 (Kindle cover lookup)",
-      ...(options.headers || {})
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetchImpl(url, {
+        ...options,
+        signal: options.signal || AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        headers: {
+          "User-Agent": "manga-telegram-orchestrator/0.1 (Kindle cover lookup)",
+          ...(options.headers || {})
+        }
+      });
+      if (![429, 500, 502, 503, 504].includes(response.status) || attempt === 2) return response;
+      await response.body?.cancel().catch(() => {});
+      const retryAfter = Number(response.headers.get("retry-after"));
+      await new Promise((resolve) => setTimeout(resolve,
+        Number.isFinite(retryAfter) ? Math.max(0, retryAfter * 1_000) : 500 * (2 ** attempt)
+      ));
+    } catch (error) {
+      lastError = error;
+      if (attempt === 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** attempt)));
     }
-  });
+  }
+  throw lastError;
 }
 
 async function json(fetchImpl, url) {
-  const response = await request(fetchImpl, url, { headers: { Accept: "application/json" } });
-  if (!response.ok) throw new Error(`Cover metadata lookup failed (${response.status})`);
-  return response.json();
+  const load = async () => {
+    const response = await request(fetchImpl, url, { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(`Cover metadata lookup failed (${response.status})`);
+    return response.json();
+  };
+  if (fetchImpl !== fetch) return load();
+  const key = String(url);
+  if (!JSON_CACHE.has(key)) {
+    JSON_CACHE.set(key, load().catch((error) => {
+      JSON_CACHE.delete(key);
+      throw error;
+    }));
+  }
+  return JSON_CACHE.get(key);
 }
 
 async function downloadImage(fetchImpl, initialUrl) {
@@ -251,10 +289,10 @@ async function appleBooksCandidates({ fetchImpl, title, volume }) {
   const candidates = [];
   for (const country of ["gb", "us"]) {
     const search = new URL("https://itunes.apple.com/search");
-    search.searchParams.set("term", `${englishSearchTitle(title)} Vol. ${volume}`);
+    search.searchParams.set("term", englishSearchTitle(title));
     search.searchParams.set("entity", "ebook");
     search.searchParams.set("country", country);
-    search.searchParams.set("limit", "25");
+    search.searchParams.set("limit", "200");
     let results;
     try {
       results = await json(fetchImpl, search);
@@ -264,7 +302,10 @@ async function appleBooksCandidates({ fetchImpl, title, volume }) {
     for (const book of results.results || []) {
       const name = book?.trackName || book?.trackCensoredName || "";
       const isManga = (book?.genres || []).some((genre) => /manga/i.test(String(genre)));
-      if (book?.kind !== "ebook" || !isManga || !seriesMatches(name, title) || !containsVolume(name, volume)) {
+      if (
+        book?.kind !== "ebook" || !isManga || NON_SINGLE_VOLUME_WORDS.test(name) ||
+        !seriesMatches(name, title) || !containsVolume(name, volume)
+      ) {
         continue;
       }
       const url = appleArtworkUrl(book.artworkUrl100);
@@ -367,10 +408,14 @@ export function isbnForVolumeFromWikipediaWikitext(wikitext, volume) {
     const volumeMatch = line.match(/^\s*\|\s*VolumeNumber\s*=\s*[^\d\n]*(\d+(?:[.,]\d+)?)/i);
     if (volumeMatch) currentVolume = numeric(volumeMatch[1]);
     if (currentVolume === null || target === null || Math.abs(currentVolume - target) >= 0.000001) continue;
-    const isbn = line.match(/^\s*\|\s*ISBN\s*=\s*([^\n]+)/i)?.[1].replace(/[^\dX]/gi, "");
+    const isbn = line.match(/^\s*\|\s*(?:Original)?ISBN\s*=\s*([^\n]+)/i)?.[1].replace(/[^\dX]/gi, "");
     if (/^978409\d{7}$/.test(isbn || "")) return isbn;
   }
   return null;
+}
+
+function japaneseTitleFromWikipediaWikitext(wikitext) {
+  return String(wikitext || "").match(/^\s*\|\s*ja_kanji\s*=\s*([^\n]+)/im)?.[1].trim() || null;
 }
 
 async function wikipediaWikitext(fetchImpl, page) {
@@ -385,15 +430,47 @@ async function wikipediaWikitext(fetchImpl, page) {
 }
 
 async function originalPublisherCover({ fetchImpl, title, volume }) {
-  const wikitext = await wikipediaWikitext(fetchImpl, englishSearchTitle(title));
-  const isbn = isbnForVolumeFromWikipediaWikitext(wikitext, volume);
-  if (!isbn) return null;
-  const jdcn = `${isbn.slice(4, -1)}0000d0000000`;
-  const image = await downloadImage(
-    fetchImpl,
-    `https://shogakukan-comic.jp/book-images/w400/digital/${jdcn}.jpg`
-  );
-  return { ...image, source: "Shogakukan (original edition)" };
+  const searchTitle = englishSearchTitle(title);
+  for (const page of [searchTitle, `${searchTitle} (manga)`]) {
+    const wikitext = await wikipediaWikitext(fetchImpl, page);
+    const japaneseTitle = japaneseTitleFromWikipediaWikitext(wikitext);
+    if (japaneseTitle) {
+      try {
+        const search = new URL("https://itunes.apple.com/search");
+        search.searchParams.set("term", japaneseTitle);
+        search.searchParams.set("entity", "ebook");
+        search.searchParams.set("country", "jp");
+        search.searchParams.set("limit", "200");
+        const results = await json(fetchImpl, search);
+        const book = (results.results || []).find((candidate) => {
+          const name = candidate?.trackName || candidate?.trackCensoredName || "";
+          const isManga = (candidate?.genres || []).some((genre) => /manga|マンガ/i.test(String(genre)));
+          return isManga && seriesMatches(name, japaneseTitle) && containsVolume(name, volume);
+        });
+        const url = appleArtworkUrl(book?.artworkUrl100);
+        if (url) {
+          const image = await downloadImage(fetchImpl, url);
+          return { ...image, source: "Apple Books (Japanese edition)" };
+        }
+      } catch {
+        // Try the publisher archive below.
+      }
+    }
+
+    const isbn = isbnForVolumeFromWikipediaWikitext(wikitext, volume);
+    if (!isbn) continue;
+    try {
+      const jdcn = `${isbn.slice(4, -1)}0000d0000000`;
+      const image = await downloadImage(
+        fetchImpl,
+        `https://shogakukan-comic.jp/book-images/w400/digital/${jdcn}.jpg`
+      );
+      return { ...image, source: "Shogakukan (original edition)" };
+    } catch {
+      // Some discontinued editions no longer have artwork in this archive.
+    }
+  }
+  return null;
 }
 
 function wikipediaSearchScore(page, title) {
@@ -446,9 +523,19 @@ export async function resolveMangaVolume({ fetchImpl = fetch, title, chapterNumb
     const results = await json(fetchImpl, search);
     const manga = selectMangaDexSeries(results.data, searchTitle);
     if (manga?.id) {
-      const aggregate = await json(fetchImpl, `https://api.mangadex.org/manga/${encodeURIComponent(manga.id)}/aggregate`);
-      const exact = volumeForChapter(aggregate, chapterNumber);
-      if (exact) return exact;
+      const languages = ["en", "ru", ...(manga.attributes?.availableTranslatedLanguages || [])]
+        .filter((language, index, values) => language && values.indexOf(language) === index);
+      for (const language of languages) {
+        try {
+          const aggregateUrl = new URL(`https://api.mangadex.org/manga/${encodeURIComponent(manga.id)}/aggregate`);
+          aggregateUrl.searchParams.append("translatedLanguage[]", language);
+          const aggregate = await json(fetchImpl, aggregateUrl);
+          const exact = globallyNumberedAggregate(aggregate) && volumeForChapter(aggregate, chapterNumber);
+          if (exact) return exact;
+        } catch {
+          // Try another translation whose chapter numbering may be complete.
+        }
+      }
     }
   } catch {
     // MangaDex metadata is often incomplete or temporarily unavailable.

@@ -56,6 +56,12 @@ test("uses only exact MangaDex chapter-volume matches", () => {
   assert.equal(volumeForChapter(aggregate, "197"), "19");
   assert.equal(volumeForChapter(aggregate, "187"), null);
   assert.equal(volumeForChapter(aggregate, "199"), null);
+  assert.equal(volumeForChapter({
+    volumes: {
+      "1": { chapters: { "1": {} } },
+      "15": { chapters: { "1": {} } }
+    }
+  }, "1"), null);
 });
 
 const THE_FABLE_WIKITEXT = `
@@ -143,6 +149,53 @@ test("uses the original Shogakukan volume cover when no English edition exists",
   assert.deepEqual(cover.bytes, coverBytes);
 });
 
+test("uses a Japanese Apple Books cover when an old Shogakukan image is unavailable", async () => {
+  const wikitext = `
+| ja_kanji = ホムンクルス
+{{Graphic novel list
+|VolumeNumber = 2
+|OriginalISBN = 978-4-09-187072-8
+}}`;
+  assert.equal(isbnForVolumeFromWikipediaWikitext(wikitext, "2"), "9784091870728");
+  const coverBytes = pngWithDimensions(1600, 2400, "homunculus-volume-2");
+  let imageAttempts = 0;
+  const fetchImpl = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "itunes.apple.com" && url.searchParams.get("country") !== "jp") {
+      return jsonResponse({ results: [{
+        kind: "ebook",
+        trackName: "Homunculus (Omnibus) Vol. 1-2",
+        genres: ["Manga"],
+        artworkUrl100: "https://is1-ssl.mzstatic.com/image/thumb/wrong-omnibus/100x100bb.jpg"
+      }] });
+    }
+    if (url.hostname === "kodansha.us") return new Response("", { status: 404 });
+    if (url.hostname === "openlibrary.org") return jsonResponse({ docs: [] });
+    if (url.hostname === "en.wikipedia.org") {
+      return jsonResponse({ parse: { wikitext: url.searchParams.get("page") === "Homunculus (manga)" ? wikitext : "" } });
+    }
+    if (url.hostname === "itunes.apple.com") {
+      assert.equal(url.searchParams.get("term"), "ホムンクルス");
+      return jsonResponse({ results: [{
+        trackName: "ホムンクルス(2)",
+        genres: ["マンガ"],
+        artworkUrl100: "https://is1-ssl.mzstatic.com/image/thumb/homunculus/100x100bb.jpg"
+      }] });
+    }
+    if (url.hostname.endsWith(".mzstatic.com")) {
+      imageAttempts += 1;
+      if (imageAttempts === 1) return new Response("busy", { status: 503, headers: { "Retry-After": "0" } });
+      return new Response(coverBytes, { status: 200, headers: { "Content-Type": "image/png" } });
+    }
+    return new Response("", { status: 404 });
+  };
+
+  const cover = await resolveEnglishVolumeCover({ fetchImpl, title: "Homunculus", volume: "2" });
+  assert.equal(cover.source, "Apple Books (Japanese edition)");
+  assert.equal(imageAttempts, 2);
+  assert.deepEqual(cover.bytes, coverBytes);
+});
+
 test("falls back to a structured chapter list when MangaDex has only a nearby anchor", async () => {
   const fetchImpl = async (input) => {
     const url = new URL(String(input));
@@ -161,6 +214,37 @@ test("falls back to a structured chapter list when MangaDex has only a nearby an
 
   assert.equal(await resolveMangaVolume({ fetchImpl, title: "The Fable", chapterNumber: "175" }), "17");
   assert.equal(await resolveMangaVolume({ fetchImpl, title: "The Fable", chapterNumber: "213" }), "20");
+});
+
+test("uses a globally numbered translation when MangaDex languages conflict", async () => {
+  const fetchImpl = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/manga") {
+      return jsonResponse({ data: [{
+        id: "homunculus",
+        attributes: {
+          title: { en: "Homunculus" },
+          availableTranslatedLanguages: ["en", "ru"]
+        }
+      }] });
+    }
+    if (url.pathname.endsWith("/aggregate") && url.searchParams.get("translatedLanguage[]") === "en") {
+      return jsonResponse({ volumes: {
+        "1": { chapters: { "1": {} } },
+        "15": { chapters: { "1": {}, "2": {}, "3": {} } }
+      } });
+    }
+    if (url.pathname.endsWith("/aggregate")) {
+      return jsonResponse({ volumes: {
+        "1": { chapters: { "1": {}, "2": {}, "3": {}, "4": {}, "5": {}, "6": {}, "7": {}, "8": {} } },
+        "2": { chapters: { "9": {}, "10": {}, "11": {}, "12": {}, "13": {}, "14": {} } }
+      } });
+    }
+    return new Response("", { status: 404 });
+  };
+
+  assert.equal(await resolveMangaVolume({ fetchImpl, title: "Homunculus", chapterNumber: "1" }), "1");
+  assert.equal(await resolveMangaVolume({ fetchImpl, title: "Homunculus", chapterNumber: "13" }), "2");
 });
 
 test("requests the exact English Apple Books cover at Kindle-quality resolution", async () => {
