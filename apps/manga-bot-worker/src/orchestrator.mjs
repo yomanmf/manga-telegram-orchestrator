@@ -165,17 +165,24 @@ export class Orchestrator {
         });
         await this.sendProgress(job.id, downloadProgress(job, job.progress));
         if (!await isNonEmptyFile(coverPath)) {
-          const cover = await this.mangaApp.downloadCover({
-            coverUrl: series.coverUrl,
-            seriesUrl: job.seriesUrl
-          });
-          await fs.writeFile(coverPath, cover, { mode: 0o600 });
+          try {
+            const cover = await this.mangaApp.downloadCover({
+              coverUrl: series.coverUrl,
+              seriesUrl: job.seriesUrl
+            });
+            await fs.writeFile(coverPath, cover, { mode: 0o600 });
+          } catch (error) {
+            console.warn(`Cannot download the ${series.title} series cover; using its first page`, error);
+          }
         }
       }
 
       const imageSources = await this.processChapters(job);
       job = this.store.getJob(job.id);
       if (job.status === "cancelled") return;
+      if (!await isNonEmptyFile(coverPath)) {
+        await fs.copyFile(imageSources[0].pages[0].filePath, coverPath);
+      }
 
       job = this.store.updateJob(job.id, { progress: `Собираю Kindle EPUB напрямую из изображений ${imageSources.length} глав` });
       await this.sendProgress(job.id, downloadProgress(job, job.progress));

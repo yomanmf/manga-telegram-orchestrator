@@ -341,7 +341,7 @@ test("runs a Telegram request through direct image EPUB assembly and Kindle conf
         ]
       };
     },
-    async downloadCover() { return TEST_COVER; },
+    async downloadCover() { throw new TypeError("fetch failed"); },
     async processChapterImages({ chapterTitle }) {
       processedChapters.push(chapterTitle);
       return testImagePage();

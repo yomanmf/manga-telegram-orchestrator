@@ -3,6 +3,7 @@ import JSZip from "jszip";
 import { extractChapterImages } from "./chapter-images.mjs";
 
 const MAX_COVER_BYTES = 12 * 1024 * 1024;
+const COVER_TIMEOUT_MS = 20_000;
 
 function assertRemoteCoverUrl(value) {
   let url;
@@ -36,6 +37,7 @@ async function fetchCover(coverUrl, seriesUrl) {
   for (let redirect = 0; redirect <= 3; redirect += 1) {
     const response = await fetch(current, {
       redirect: "manual",
+      signal: AbortSignal.timeout(COVER_TIMEOUT_MS),
       headers: {
         Accept: "image/jpeg,image/png;q=0.9,*/*;q=0.1",
         Referer: String(seriesUrl || "https://weebcentral.com/")
