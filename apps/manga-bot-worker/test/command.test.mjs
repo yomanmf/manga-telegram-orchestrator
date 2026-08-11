@@ -371,9 +371,9 @@ test("runs a Telegram request through direct image EPUB assembly and Kindle conf
   assert.equal(job.toChapter, "latest");
   assert.equal(job.chapterManifest.length, 4);
   assert.deepEqual(processedChapters, ["Chapter 22", "Chapter 23", "Chapter 24", "Chapter 25"]);
-  assert.equal(job.kindleJobs.length, 1);
+  assert.equal(job.kindleJobs.length, 4);
   assert.equal(startedBatch, job.id);
-  assert.deepEqual(enqueueOptions, [{ batchId: job.id, deferStart: true }]);
+  assert.deepEqual(enqueueOptions, Array(4).fill({ batchId: job.id, deferStart: true }));
   assert.equal(failedProgressNotification, true);
   const chapterProgress = messages.filter(({ text }) => /^⬇️ Скачиваю One Piece \(Color\): обработано \d+\/\d+ глав$/.test(text));
   assert.deepEqual(chapterProgress.map(({ text }) => text.match(/(\d+\/\d+)/)[1]), ["4/4"]);
@@ -387,6 +387,7 @@ test("runs a Telegram request through direct image EPUB assembly and Kindle conf
 
 test("keeps completed chapter checkpoints after a processing failure", async () => {
   const directory = `/tmp/manga-orchestrator-cleanup-test-${Date.now()}-${Math.random()}`;
+  await fs.mkdir(`${directory}/work/stale-job`, { recursive: true });
   const store = createStore(directory);
   let processed = 0;
   const orchestrator = new Orchestrator({
@@ -412,7 +413,9 @@ test("keeps completed chapter checkpoints after a processing failure", async () 
       }
     },
     kindle: {
-      async enqueueFile() { throw new Error("must not enqueue"); },
+      async enqueueFile(_filePath, filename) {
+        return { id: `kindle-${filename}`, filename, size: 100, status: "queued" };
+      },
       async job() { throw new Error("must not inspect"); },
       async connectToken() { return { url: "https://example.test/connect" }; }
     },
@@ -426,7 +429,8 @@ test("keeps completed chapter checkpoints after a processing failure", async () 
   const job = store.latestJob("8");
   assert.equal(job.status, "failed");
   assert.match(job.error, /processor unavailable/);
-  await fs.access(`${directory}/work/${job.id}/chapters/0001/manifest.json`);
+  await assert.rejects(fs.access(`${directory}/work/stale-job`), /ENOENT/);
+  await fs.access(`${directory}/work/${job.id}/chapters/0001/staged.json`);
 });
 
 test("retry resumes from completed chapter checkpoints", async () => {
@@ -478,7 +482,7 @@ test("retry resumes from completed chapter checkpoints", async () => {
   await orchestrator.tick();
   const failed = store.latestJob("10");
   assert.equal(failed.status, "failed");
-  await fs.access(`${directory}/work/${failed.id}/chapters/0001/manifest.json`);
+  await fs.access(`${directory}/work/${failed.id}/chapters/0001/staged.json`);
 
   await orchestrator.handleMessage({ chat: { id: 10 }, text: "/retry" });
   await orchestrator.tick();

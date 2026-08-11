@@ -100,6 +100,7 @@ async function preparePageImage(item, destinationDir, operationIndex, imageIndex
     const { size } = await fs.stat(item.filePath);
     return {
       filePath: item.filePath,
+      sourceFilePath: item.filePath,
       size,
       info: { extension: "jpg", mediaType: "image/jpeg" }
     };
@@ -116,6 +117,7 @@ async function preparePageImage(item, destinationDir, operationIndex, imageIndex
   const { size } = await fs.stat(filePath);
   return {
     filePath,
+    sourceFilePath: item.filePath,
     size,
     info: { extension: "jpg", mediaType: "image/jpeg" }
   };
@@ -131,6 +133,7 @@ async function prepareSingle(operation, mergeVerticalPages, destinationDir, oper
       size: prepared.size,
       images: [{
         filePath: prepared.filePath,
+        sourceFilePath: prepared.sourceFilePath,
         x: item.width,
         y: 0,
         width: item.width,
@@ -145,6 +148,7 @@ async function prepareSingle(operation, mergeVerticalPages, destinationDir, oper
     size: prepared.size,
     images: [{
       filePath: prepared.filePath,
+      sourceFilePath: prepared.sourceFilePath,
       x: 0,
       y: 0,
       width: item.width,
@@ -165,6 +169,7 @@ async function preparePair(operation, destinationDir, operationIndex) {
   function pageImage(item, prepared, x, y) {
     return {
       filePath: prepared.filePath,
+      sourceFilePath: prepared.sourceFilePath,
       x,
       y,
       width: item.width,
@@ -239,6 +244,13 @@ function uniqueSources(pages) {
   return sources;
 }
 
+async function removeConsumedImages(pages) {
+  const paths = new Set(
+    pages.flatMap((page) => page.images.flatMap((image) => [image.filePath, image.sourceFilePath]))
+  );
+  await Promise.all([...paths].filter(Boolean).map((filePath) => fs.rm(filePath, { force: true })));
+}
+
 function sanitize(value) {
   return String(value || "manga")
     .replace(/[<>:"/\\|?*]/g, "_")
@@ -268,6 +280,7 @@ export async function buildKindleImageVolumes({
   mergeVerticalPages = true,
   coverPath,
   coverLookup = true,
+  consumeSourceImages = false,
   imageRenderConcurrency = 2,
   epubBuildConcurrency = 2
 }) {
@@ -324,6 +337,7 @@ export async function buildKindleImageVolumes({
         if (size > MAX_KINDLE_FILE_BYTES) {
           throw new Error(`${fileName} exceeds the 200 MB Kindle upload limit`);
         }
+        if (consumeSourceImages) await removeConsumedImages(pages);
         return {
           fileName,
           filePath,

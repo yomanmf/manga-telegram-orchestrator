@@ -72,8 +72,9 @@ reading spine. Instead, the first manga spread is also marked as the internal
 cover and reading start, so Kindle opens on that landscape spread while retaining
 the portrait artwork as the library cover.
 The subprocess exits after packaging so the operating system reclaims PDF and
-image memory immediately, and the complete job workspace is removed after
-success, cancellation, or failure.
+image memory immediately. Packaged source pages are deleted as each EPUB is
+finished; failed checkpoints remain available for `/retry`, and starting a new
+request removes older unreachable workspaces.
 
 ## Local verification
 

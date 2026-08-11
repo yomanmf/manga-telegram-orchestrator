@@ -140,6 +140,7 @@ export class Orchestrator {
     let job = initialJob;
     const workDir = path.join(this.tempRoot, initialJob.id);
     try {
+      await this.pruneWorkspaces(initialJob.id);
       job = this.store.updateJob(job.id, { status: "processing", error: null, progress: "Определяю произведение" });
       await this.sendProgress(job.id, downloadProgress(job, job.progress));
 
@@ -179,31 +180,49 @@ export class Orchestrator {
         }
       }
 
-      const imageSources = await this.processChapters(job);
-      job = this.store.getJob(job.id);
-      if (job.status === "cancelled") return;
-      if (!await isNonEmptyFile(coverPath)) {
-        await fs.copyFile(imageSources[0].pages[0].filePath, coverPath);
-      }
-
-      job = this.store.updateJob(job.id, { progress: `Собираю Kindle EPUB напрямую из изображений ${imageSources.length} глав` });
-      await this.sendProgress(job.id, downloadProgress(job, job.progress));
-      const volumes = await buildKindleImageVolumesInSubprocess({
-        sources: imageSources,
-        destinationDir: path.join(workDir, "volumes"),
-        baseName: job.seriesTitle,
-        maxBytes: this.maxPdfBytes,
-        mergeVerticalPages: job.mergeVerticalPages,
-        coverPath,
-        imageRenderConcurrency: this.epubBuildConcurrency,
-        epubBuildConcurrency: this.epubBuildConcurrency
-      });
-      if (volumes.some((volume) => volume.oversize)) {
-        throw new Error("Одна часть превышает безопасный лимит Kindle; требуется разбиение исходной главы");
-      }
-
       const batchId = job.id;
-      const queued = await this.enqueueVolumes(job, volumes, batchId);
+      let queued = [...job.kindleJobs];
+      for (let index = 0; index < job.chapterManifest.length; index += 1) {
+        const chapter = job.chapterManifest[index];
+        const chapterDir = path.join(workDir, "chapters", String(index + 1).padStart(4, "0"));
+        if (await isStagedChapter(chapterDir, chapter)) continue;
+        const sources = await this.processChapters(job, [chapter], index);
+        job = this.store.getJob(job.id);
+        if (job.status === "cancelled") return;
+        if (!await isNonEmptyFile(coverPath)) {
+          await fs.copyFile(sources[0].pages[0].filePath, coverPath);
+        }
+
+        job = this.store.updateJob(job.id, {
+          progress: `Собираю Kindle EPUB ${index + 1}–${index + sources.length}/${job.chapterManifest.length}`
+        });
+        await this.sendProgress(job.id, downloadProgress(job, job.progress));
+        const volumeDir = path.join(workDir, "volumes", String(index + 1).padStart(4, "0"));
+        const volumes = await buildKindleImageVolumesInSubprocess({
+          sources,
+          destinationDir: volumeDir,
+          baseName: job.seriesTitle,
+          maxBytes: this.maxPdfBytes,
+          mergeVerticalPages: job.mergeVerticalPages,
+          coverPath,
+          consumeSourceImages: true,
+          imageRenderConcurrency: this.epubBuildConcurrency,
+          epubBuildConcurrency: 1
+        });
+        if (volumes.some((volume) => volume.oversize)) {
+          throw new Error("Одна часть превышает безопасный лимит Kindle; требуется разбиение исходной главы");
+        }
+        queued = await this.enqueueVolumes(this.store.getJob(job.id), volumes, batchId);
+        await fs.rm(chapterDir, { recursive: true, force: true });
+        await fs.mkdir(chapterDir, { recursive: true });
+        await fs.writeFile(
+          path.join(chapterDir, "staged.json"),
+          `${JSON.stringify({ version: 1, chapterId: chapter.id, chapterTitle: chapter.title })}\n`,
+          { mode: 0o600 }
+        );
+        await fs.rm(volumeDir, { recursive: true, force: true });
+      }
+
       job = this.store.getJob(job.id);
       if (job.status === "cancelled") return;
       if (queued.some((item) => item.batchId === batchId)) {
@@ -255,27 +274,28 @@ export class Orchestrator {
     return this.store.updateJob(job.id, { seriesUrl: choices[0].url, seriesTitle: choices[0].title });
   }
 
-  async processChapters(job) {
+  async processChapters(job, chapters = job.chapterManifest, startIndex = 0) {
     const workDir = path.join(this.tempRoot, job.id, "chapters");
     await fs.mkdir(workDir, { recursive: true });
-    const chapters = job.chapterManifest;
-    let completedCount = 0;
+    const totalCount = job.chapterManifest.length;
+    let completedCount = startIndex;
     const chapterSources = await mapWithConcurrency(
       chapters,
       this.chapterProcessingConcurrency,
       async (chapter, index) => {
         const current = this.store.getJob(job.id);
         if (!current || current.status === "cancelled") return null;
-        const chapterDir = path.join(workDir, String(index + 1).padStart(4, "0"));
+        const chapterNumber = startIndex + index + 1;
+        const chapterDir = path.join(workDir, String(chapterNumber).padStart(4, "0"));
         const checkpoint = await readChapterCheckpoint(chapterDir, chapter);
         if (checkpoint) {
           completedCount += 1;
           this.store.updateJob(job.id, {
-            progress: `Восстановлено ${completedCount}/${chapters.length}: ${chapter.title}`
+            progress: `Восстановлено ${completedCount}/${totalCount}: ${chapter.title}`
           });
           return checkpoint;
         }
-        const processing = `Обрабатываю ${index + 1}/${chapters.length}: ${chapter.title}`;
+        const processing = `Обрабатываю ${chapterNumber}/${totalCount}: ${chapter.title}`;
         this.store.updateJob(job.id, { progress: processing });
         const pages = await this.mangaApp.processChapterImages({
           chapterId: chapter.id,
@@ -304,10 +324,10 @@ export class Orchestrator {
         await writeChapterCheckpoint(chapterDir, chapter, storedPages);
 
         completedCount += 1;
-        const completed = `Обработано ${completedCount}/${chapters.length}: ${chapter.title}`;
+        const completed = `Обработано ${completedCount}/${totalCount}: ${chapter.title}`;
         this.store.updateJob(job.id, { progress: completed });
-        if (completedCount % 3 === 0 || completedCount === chapters.length) {
-          await this.sendProgress(job.id, `⬇️ Скачиваю ${jobTitle(job)}: обработано ${completedCount}/${chapters.length} глав`);
+        if (completedCount % 3 === 0 || completedCount === totalCount) {
+          await this.sendProgress(job.id, `⬇️ Скачиваю ${jobTitle(job)}: обработано ${completedCount}/${totalCount} глав`);
         }
         return {
           name: chapter.title,
@@ -321,6 +341,7 @@ export class Orchestrator {
 
   async enqueueVolumes(job, volumes, batchId = job.id) {
     const queued = [...job.kindleJobs];
+    const existingOrder = new Map(queued.map((item, index) => [item.filename, index]));
     const volumeOrder = new Map(
       volumes.map((volume, index) => [volume.fileName, index])
     );
@@ -349,8 +370,14 @@ export class Orchestrator {
           batchId
         });
         queued.sort((left, right) =>
-          (volumeOrder.get(left.filename) ?? Number.MAX_SAFE_INTEGER) -
-          (volumeOrder.get(right.filename) ?? Number.MAX_SAFE_INTEGER)
+          existingOrder.has(left.filename) && existingOrder.has(right.filename)
+            ? existingOrder.get(left.filename) - existingOrder.get(right.filename)
+            : existingOrder.has(left.filename)
+              ? -1
+              : existingOrder.has(right.filename)
+                ? 1
+                : (volumeOrder.get(left.filename) ?? Number.MAX_SAFE_INTEGER) -
+                  (volumeOrder.get(right.filename) ?? Number.MAX_SAFE_INTEGER)
         );
         this.store.updateJob(job.id, { kindleJobs: [...queued] });
         return kindleJob;
@@ -429,8 +456,12 @@ export class Orchestrator {
   }
 
   async retry(chatId) {
+    const previous = this.store.latestJob(chatId, ["failed", "waiting_auth"]);
     const job = this.store.retryLatest(chatId);
     if (job) {
+      if (/ENOSPC|no space left|диске закончилось/i.test(previous?.error || "")) {
+        await this.cleanupWorkspace(job.id);
+      }
       await this.sendProgress(job.id, `🔄 Повторно скачиваю ${jobTitle(job)}.`);
     } else {
       await this.telegram.sendMessage(chatId, "ℹ️ Нет неудавшегося задания для повтора.");
@@ -442,6 +473,14 @@ export class Orchestrator {
     await fs.rm(workDir, { recursive: true, force: true }).catch((error) => {
       console.error("Cannot clean manga job workspace", workDir, error);
     });
+  }
+
+  async pruneWorkspaces(activeJobId) {
+    await fs.mkdir(this.tempRoot, { recursive: true });
+    const entries = await fs.readdir(this.tempRoot, { withFileTypes: true });
+    await Promise.all(entries
+      .filter((entry) => entry.isDirectory() && entry.name !== activeJobId)
+      .map((entry) => fs.rm(path.join(this.tempRoot, entry.name), { recursive: true, force: true })));
   }
 
   async mergeVerticalPages(chatId, enabled) {
@@ -577,6 +616,15 @@ async function readChapterCheckpoint(chapterDir, chapter) {
   }
 }
 
+async function isStagedChapter(chapterDir, chapter) {
+  try {
+    const marker = JSON.parse(await fs.readFile(path.join(chapterDir, "staged.json"), "utf8"));
+    return marker.version === 1 && marker.chapterId === chapter.id && marker.chapterTitle === chapter.title;
+  } catch {
+    return false;
+  }
+}
+
 async function writeChapterCheckpoint(chapterDir, chapter, pages) {
   const manifest = {
     version: 1,
@@ -595,7 +643,12 @@ async function writeChapterCheckpoint(chapterDir, chapter, pages) {
   await fs.rename(temporary, destination);
 }
 
-function errorMessage(error) { return error instanceof Error ? error.message : String(error); }
+function errorMessage(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /ENOSPC|no space left on device/i.test(message)
+    ? "на диске закончилось место; освободил старые файлы, повторите через /retry"
+    : message;
+}
 function isWebControlJob(job) { return String(job.chatId || "").startsWith("web:"); }
 function formatMegabytes(bytes) { return `${(Number(bytes) / 1_000_000).toFixed(1)} МБ`; }
 function jobTitle(job) { return job.seriesTitle || job.titleQuery; }

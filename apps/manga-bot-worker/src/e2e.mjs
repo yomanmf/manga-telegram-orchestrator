@@ -15,55 +15,76 @@ export async function runMangaE2E({ client, build = buildKindleImageVolumesInSub
     if (!choice?.url) throw new Error(`No manga found for ${query}`);
 
     const series = await client.loadSeries(choice.url);
-    const chapter = series.chapters?.[0];
-    if (!chapter?.id) throw new Error("The selected manga has no chapters");
+    const chapters = series.chapters || [];
+    if (!chapters[0]?.id) throw new Error("The selected manga has no chapters");
 
-    const pages = await client.processChapterImages({
-      chapterId: chapter.id,
-      mangaTitle: series.title,
-      chapterTitle: chapter.title,
-    });
-    const storedPages = [];
-    for (let index = 0; index < pages.length; index += 1) {
-      const extension = pages[index].format === "jpg" ? "jpg" : "png";
-      const filePath = path.join(workDir, `page-${index + 1}.${extension}`);
-      await fs.writeFile(filePath, pages[index].bytes);
-      storedPages.push({
-        filePath,
-        width: pages[index].width,
-        height: pages[index].height,
-        format: pages[index].format,
-      });
-    }
-
+    let coverReady = false;
     const coverPath = path.join(workDir, "cover.img");
     try {
       await fs.writeFile(coverPath, await client.downloadCover({
         coverUrl: series.coverUrl,
         seriesUrl: choice.url,
       }));
-    } catch {
-      await fs.copyFile(storedPages[0].filePath, coverPath);
-    }
+      coverReady = true;
+    } catch {}
 
-    const volumes = await build({
-      sources: [{ name: chapter.title, chapterTitle: chapter.title, pages: storedPages }],
-      destinationDir: path.join(workDir, "volumes"),
-      baseName: series.title,
-      maxBytes: MAX_BYTES,
-      mergeVerticalPages: true,
-      coverPath,
-      coverLookup: false,
-    });
-    if (!volumes.length || volumes.some((volume) => !volume.size || volume.oversize)) {
-      throw new Error("Manga Kindle assembly produced an invalid volume");
+    let files = 0;
+    let sizeBytes = 0;
+    for (let chapterIndex = 0; chapterIndex < chapters.length; chapterIndex += 1) {
+      const sources = await Promise.all(chapters.slice(chapterIndex, chapterIndex + 1).map(async (chapter, offset) => {
+        const pages = await client.processChapterImages({
+          chapterId: chapter.id,
+          mangaTitle: series.title,
+          chapterTitle: chapter.title,
+        });
+        const chapterDir = path.join(workDir, `chapter-${chapterIndex + offset + 1}`);
+        await fs.mkdir(chapterDir);
+        const storedPages = [];
+        for (let index = 0; index < pages.length; index += 1) {
+          const extension = pages[index].format === "jpg" ? "jpg" : "png";
+          const filePath = path.join(chapterDir, `page-${index + 1}.${extension}`);
+          await fs.writeFile(filePath, pages[index].bytes);
+          storedPages.push({
+            filePath,
+            width: pages[index].width,
+            height: pages[index].height,
+            format: pages[index].format,
+          });
+        }
+        return { name: chapter.title, chapterTitle: chapter.title, pages: storedPages, chapterDir };
+      }));
+      if (!coverReady) {
+        await fs.copyFile(sources[0].pages[0].filePath, coverPath);
+        coverReady = true;
+      }
+      const volumeDir = path.join(workDir, `volumes-${chapterIndex + 1}`);
+      const volumes = await build({
+        sources,
+        destinationDir: volumeDir,
+        baseName: series.title,
+        maxBytes: MAX_BYTES,
+        mergeVerticalPages: true,
+        coverPath,
+        coverLookup: false,
+        consumeSourceImages: true,
+        epubBuildConcurrency: 1,
+      });
+      if (!volumes.length || volumes.some((volume) => !volume.size || volume.oversize)) {
+        throw new Error("Manga Kindle assembly produced an invalid volume");
+      }
+      files += volumes.length;
+      sizeBytes += volumes.reduce((total, volume) => total + volume.size, 0);
+      await Promise.all([
+        ...sources.map((source) => fs.rm(source.chapterDir, { recursive: true, force: true })),
+        fs.rm(volumeDir, { recursive: true, force: true })
+      ]);
     }
     return {
       ok: true,
       title: series.title,
-      chapter: chapter.title,
-      files: volumes.length,
-      sizeBytes: volumes.reduce((total, volume) => total + volume.size, 0),
+      chapters: chapters.length,
+      files,
+      sizeBytes,
       kindleDelivery: "skipped",
     };
   } finally {

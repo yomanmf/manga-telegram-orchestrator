@@ -81,6 +81,7 @@ test("builds a compact Kindle-compatible EPUB without recompressing JPEG inputs"
     mergeVerticalPages: true,
     coverPath,
     coverLookup: false,
+    consumeSourceImages: true,
     imageRenderConcurrency: 2,
     epubBuildConcurrency: 2
   });
@@ -124,4 +125,7 @@ test("builds a compact Kindle-compatible EPUB without recompressing JPEG inputs"
     fs.access(path.join(directory, "out", ".prepared-images")),
     /ENOENT/
   );
+  for (const source of sources) {
+    for (const item of source.pages) await assert.rejects(fs.access(item.filePath), /ENOENT/);
+  }
 });

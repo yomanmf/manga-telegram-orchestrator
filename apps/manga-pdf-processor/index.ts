@@ -50,7 +50,7 @@ const MAX_PDF_SIZE = 185 * 1024 * 1024;
 const WEEBCENTRAL_IMAGE_CONCURRENCY =
   boundedInteger(
     process.env.WEEBCENTRAL_IMAGE_CONCURRENCY,
-    3,
+    6,
     { min: 1, max: 16 }
   );
 const WEEBCENTRAL_IMAGE_TIMEOUT_MS =
