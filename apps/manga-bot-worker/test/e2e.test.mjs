@@ -17,7 +17,9 @@ test("builds a live-flow manga artifact without calling Kindle delivery", async 
         };
       },
       async downloadCover() { return Buffer.from("cover"); },
-      async processChapter() { return [{ name: "chapter.pdf", bytes: Buffer.from("pdf") }]; },
+      async processChapterImages() {
+        return [{ bytes: Buffer.from("image"), width: 1200, height: 1800, format: "jpg" }];
+      },
     },
     async build(options) {
       built = options;
@@ -25,7 +27,8 @@ test("builds a live-flow manga artifact without calling Kindle delivery", async 
     },
   });
 
-  assert.equal(built.sourcePdfs.length, 1);
+  assert.equal(built.sources.length, 1);
+  assert.equal(built.sources[0].pages.length, 1);
   assert.deepEqual(result, {
     ok: true,
     title: "Test Manga",

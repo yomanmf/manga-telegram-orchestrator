@@ -3,11 +3,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { createMangaAppClient } from "./manga-app.mjs";
-import { buildKindleVolumesInSubprocess } from "./pdf-subprocess.mjs";
+import { buildKindleImageVolumesInSubprocess } from "./pdf-subprocess.mjs";
 
 const MAX_BYTES = 150_000_000;
 
-export async function runMangaE2E({ client, build = buildKindleVolumesInSubprocess, query = "One Piece" }) {
+export async function runMangaE2E({ client, build = buildKindleImageVolumesInSubprocess, query = "One Piece" }) {
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "manga-e2e-"));
   try {
     const search = await client.search(query);
@@ -18,32 +18,42 @@ export async function runMangaE2E({ client, build = buildKindleVolumesInSubproce
     const chapter = series.chapters?.[0];
     if (!chapter?.id) throw new Error("The selected manga has no chapters");
 
-    const coverPath = path.join(workDir, "cover.img");
-    await fs.writeFile(coverPath, await client.downloadCover({
-      coverUrl: series.coverUrl,
-      seriesUrl: choice.url,
-    }));
-
-    const outputs = await client.processChapter({
+    const pages = await client.processChapterImages({
       chapterId: chapter.id,
       mangaTitle: series.title,
       chapterTitle: chapter.title,
-      shouldMerge: true,
     });
-    const sourcePdfs = [];
-    for (let index = 0; index < outputs.length; index += 1) {
-      const filePath = path.join(workDir, `chapter-${index + 1}.pdf`);
-      await fs.writeFile(filePath, outputs[index].bytes);
-      sourcePdfs.push({ name: outputs[index].name, chapterTitle: chapter.title, filePath });
+    const storedPages = [];
+    for (let index = 0; index < pages.length; index += 1) {
+      const extension = pages[index].format === "jpg" ? "jpg" : "png";
+      const filePath = path.join(workDir, `page-${index + 1}.${extension}`);
+      await fs.writeFile(filePath, pages[index].bytes);
+      storedPages.push({
+        filePath,
+        width: pages[index].width,
+        height: pages[index].height,
+        format: pages[index].format,
+      });
+    }
+
+    const coverPath = path.join(workDir, "cover.img");
+    try {
+      await fs.writeFile(coverPath, await client.downloadCover({
+        coverUrl: series.coverUrl,
+        seriesUrl: choice.url,
+      }));
+    } catch {
+      await fs.copyFile(storedPages[0].filePath, coverPath);
     }
 
     const volumes = await build({
-      sourcePdfs,
+      sources: [{ name: chapter.title, chapterTitle: chapter.title, pages: storedPages }],
       destinationDir: path.join(workDir, "volumes"),
       baseName: series.title,
       maxBytes: MAX_BYTES,
       mergeVerticalPages: true,
       coverPath,
+      coverLookup: false,
     });
     if (!volumes.length || volumes.some((volume) => !volume.size || volume.oversize)) {
       throw new Error("Manga Kindle assembly produced an invalid volume");

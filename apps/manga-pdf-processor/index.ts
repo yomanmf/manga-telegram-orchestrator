@@ -35,6 +35,11 @@ import {
 import {
   buildCoveredKindleEpub
 } from "./kindle-cover-epub.mjs";
+import {
+  isMangaDexChapterId,
+  loadCompleteMangaDexVolumes,
+  loadMangaDexChapterImageUrls
+} from "./mangadex-source.mjs";
 
 await loadAnalyticsLockbox();
 const analyticsReporter = createAnalyticsReporter();
@@ -5616,6 +5621,9 @@ function getWeebCentralChapterArchiveInput(
   if (
     !isValidWeebCentralChapterId(
       chapterId
+    ) &&
+    !isMangaDexChapterId(
+      chapterId
     )
   ) {
 
@@ -6483,16 +6491,37 @@ async function loadWeebCentralSeries(
   }
 
 
+  const title =
+    parseWeebCentralSeriesTitle(
+      seriesHtml
+    );
+
+  let selectedChapters = chapters;
+
+  if (!await canDownloadWeebCentralImages(chapters[0].id)) {
+    try {
+      const mangaDexChapters =
+        await loadCompleteMangaDexVolumes(
+          title
+        );
+      if (mangaDexChapters.length > 0) {
+        selectedChapters = mangaDexChapters;
+      }
+    } catch (error) {
+      console.warn(
+        "MangaDex fallback is unavailable:",
+        error
+      );
+    }
+  }
+
   return {
-    title:
-      parseWeebCentralSeriesTitle(
-        seriesHtml
-      ),
+    title,
     coverUrl:
       parseWeebCentralCoverUrl(
         seriesHtml
       ),
-    chapters
+    chapters: selectedChapters
   };
 
 }
@@ -6573,9 +6602,17 @@ async function downloadWeebCentralChapterImages(
 ) {
 
   const imageUrls =
-    await loadWeebCentralChapterImageUrls(
-      chapterId
-    );
+    isMangaDexChapterId(chapterId)
+      ? await loadMangaDexChapterImageUrls(
+          chapterId
+        )
+      : await loadWeebCentralChapterImageUrls(
+          chapterId
+        );
+
+  imageUrls.forEach(
+    assertSafeRemoteImageUrl
+  );
 
   const selectedUrls =
     pageLimit === null
@@ -6736,9 +6773,11 @@ async function fetchWeebCentralChapterImage(
         "User-Agent":
           WEEBCENTRAL_USER_AGENT,
         "Referer":
-          getWeebCentralChapterUrl(
-            chapterId
-          )
+          isMangaDexChapterId(chapterId)
+            ? "https://mangadex.org/"
+            : getWeebCentralChapterUrl(
+                chapterId
+              )
       },
       timeoutMs:
         WEEBCENTRAL_IMAGE_TIMEOUT_MS,
@@ -6750,6 +6789,42 @@ async function fetchWeebCentralChapterImage(
       ]
     }
   );
+
+}
+
+
+async function canDownloadWeebCentralImages(
+  chapterId
+) {
+
+  try {
+    const imageUrls =
+      await loadWeebCentralChapterImageUrls(
+        chapterId
+      );
+
+    const response = await fetch(
+      imageUrls[0],
+      {
+        headers: {
+          "User-Agent":
+            WEEBCENTRAL_USER_AGENT,
+          "Referer":
+            getWeebCentralChapterUrl(
+              chapterId
+            ),
+          "Range": "bytes=0-32767"
+        },
+        signal: AbortSignal.timeout(5_000)
+      }
+    );
+
+    if (!response.ok) return false;
+    await response.arrayBuffer();
+    return true;
+  } catch (_) {
+    return false;
+  }
 
 }
 
