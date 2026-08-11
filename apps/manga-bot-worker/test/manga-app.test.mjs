@@ -41,21 +41,24 @@ test("rejects unsafe cover URLs before fetching", async () => {
   );
 });
 
-test("requests normalized source images for the direct EPUB pipeline", async () => {
-  const zip = new JSZip();
-  zip.file("pages/page_0001.jpg", Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
-  zip.file("manifest.json", JSON.stringify({
-    version: 1,
-    pages: [
-      { fileName: "pages/page_0001.jpg", width: 1200, height: 1800, format: "jpg" }
-    ]
+test("requests large chapters in bounded image batches", async () => {
+  const archives = await Promise.all([1, 2].map(async (page) => {
+    const zip = new JSZip();
+    const fileName = `pages/page_${String(page).padStart(4, "0")}.jpg`;
+    zip.file(fileName, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    zip.file("manifest.json", JSON.stringify({
+      version: 1,
+      pages: [{ fileName, width: 1200, height: 1800, format: "jpg" }]
+    }));
+    return zip.generateAsync({ type: "uint8array", compression: "STORE" });
   }));
-  const archive = await zip.generateAsync({ type: "uint8array", compression: "STORE" });
   const originalFetch = globalThis.fetch;
-  let requestBody;
+  const requestBodies = [];
   globalThis.fetch = async (_url, options) => {
-    requestBody = JSON.parse(options.body);
-    return new Response(archive, { headers: { "Content-Type": "application/zip" } });
+    requestBodies.push(JSON.parse(options.body));
+    return new Response(archives.shift(), {
+      headers: { "Content-Type": "application/zip", "X-Total-Count": "2" }
+    });
   };
 
   try {
@@ -65,9 +68,12 @@ test("requests normalized source images for the direct EPUB pipeline", async () 
       mangaTitle: "Manga",
       chapterTitle: "Chapter 1"
     });
-    assert.equal(requestBody.outputFormat, "images");
-    assert.equal(requestBody.shouldMerge, false);
-    assert.equal(pages.length, 1);
+    assert.deepEqual(requestBodies.map(({ pageStart, pageLimit }) => ({ pageStart, pageLimit })), [
+      { pageStart: 0, pageLimit: 64 },
+      { pageStart: 1, pageLimit: 64 }
+    ]);
+    assert.ok(requestBodies.every(({ outputFormat, shouldMerge }) => outputFormat === "images" && shouldMerge === false));
+    assert.equal(pages.length, 2);
     assert.deepEqual(
       { width: pages[0].width, height: pages[0].height, format: pages[0].format },
       { width: 1200, height: 1800, format: "jpg" }

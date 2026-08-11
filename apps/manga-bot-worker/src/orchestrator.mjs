@@ -217,6 +217,7 @@ export class Orchestrator {
     } catch (error) {
       const latest = this.store.getJob(initialJob.id);
       if (latest?.status === "cancelled") return;
+      console.error("Manga job failed", error);
       const message = errorMessage(error);
       this.store.updateJob(initialJob.id, { status: "failed", error: message, progress: "Ошибка" });
       this.completeAnalytics(latest || initialJob, "error", null, message);

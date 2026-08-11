@@ -4,6 +4,7 @@ import { extractChapterImages } from "./chapter-images.mjs";
 
 const MAX_COVER_BYTES = 12 * 1024 * 1024;
 const COVER_TIMEOUT_MS = 20_000;
+const CHAPTER_IMAGE_BATCH_SIZE = 64;
 
 function assertRemoteCoverUrl(value) {
   let url;
@@ -84,7 +85,9 @@ export function createMangaAppClient({ baseUrl, sessionToken }) {
     mangaTitle,
     chapterTitle,
     shouldMerge,
-    outputFormat
+    outputFormat,
+    pageStart,
+    pageLimit
   }) {
     const response = await fetch(`${url}/weebcentral/chapter`, {
       method: "POST",
@@ -98,14 +101,19 @@ export function createMangaAppClient({ baseUrl, sessionToken }) {
         mangaTitle,
         chapterTitle,
         shouldMerge,
-        outputFormat
+        outputFormat,
+        ...(pageStart == null ? {} : { pageStart }),
+        ...(pageLimit == null ? {} : { pageLimit })
       })
     });
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       throw new Error(data.error || `Chapter processing failed (${response.status})`);
     }
-    return JSZip.loadAsync(await response.arrayBuffer());
+    return {
+      zip: await JSZip.loadAsync(await response.arrayBuffer()),
+      totalPages: Number(response.headers.get("x-total-count")) || null
+    };
   }
 
   return {
@@ -119,7 +127,7 @@ export function createMangaAppClient({ baseUrl, sessionToken }) {
       return fetchCover(coverUrl, seriesUrl);
     },
     async processChapter({ chapterId, mangaTitle, chapterTitle, shouldMerge = true }) {
-      const zip = await processChapterArchive({
+      const { zip } = await processChapterArchive({
         chapterId,
         mangaTitle,
         chapterTitle,
@@ -136,14 +144,22 @@ export function createMangaAppClient({ baseUrl, sessionToken }) {
       return files;
     },
     async processChapterImages({ chapterId, mangaTitle, chapterTitle }) {
-      const zip = await processChapterArchive({
-        chapterId,
-        mangaTitle,
-        chapterTitle,
-        shouldMerge: false,
-        outputFormat: "images"
-      });
-      return extractChapterImages(zip);
+      const pages = [];
+      while (true) {
+        const { zip, totalPages } = await processChapterArchive({
+          chapterId,
+          mangaTitle,
+          chapterTitle,
+          shouldMerge: false,
+          outputFormat: "images",
+          pageStart: pages.length,
+          pageLimit: CHAPTER_IMAGE_BATCH_SIZE
+        });
+        const batch = await extractChapterImages(zip);
+        pages.push(...batch);
+        if (totalPages === null || pages.length >= totalPages) return pages;
+        if (batch.length === 0) throw new Error("The manga processor returned an incomplete chapter");
+      }
     }
   };
 }

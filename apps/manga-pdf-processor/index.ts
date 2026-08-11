@@ -5422,10 +5422,13 @@ app.post(
       return c.body(
         result.archiveData,
         {
-          headers:
-            createZipArchiveHeaders(
+          headers: {
+            ...createZipArchiveHeaders(
               result.outputCount
-            )
+            ),
+            "X-Total-Count":
+              String(result.totalCount)
+          }
         }
       );
 
@@ -5533,9 +5536,11 @@ async function processWeebCentralChapterArchive(
       body
     );
 
-  const images =
+  const batch =
     await downloadWeebCentralChapterImages(
-      input.chapterId
+      input.chapterId,
+      input.pageStart,
+      input.pageLimit
     );
 
   const session =
@@ -5545,8 +5550,9 @@ async function processWeebCentralChapterArchive(
     input.outputFormat === "images"
   ) {
     writeChapterImagesToZip(
-      images,
-      session
+      batch.images,
+      session,
+      input.pageStart
     );
 
     return {
@@ -5554,7 +5560,8 @@ async function processWeebCentralChapterArchive(
         await generateZipArchive(
           session
         ),
-      outputCount: images.length
+      outputCount: batch.images.length,
+      totalCount: batch.totalCount
     };
   }
 
@@ -5562,7 +5569,7 @@ async function processWeebCentralChapterArchive(
     await writeOperationsToZip({
       operations:
         buildOperations(
-          images,
+          batch.images,
           input.shouldMerge,
           input.shouldUseRightToLeft
         ),
@@ -5589,7 +5596,8 @@ async function processWeebCentralChapterArchive(
       await generateZipArchive(
         session
       ),
-    outputCount
+    outputCount,
+    totalCount: batch.totalCount
   };
 
 }
@@ -5633,6 +5641,35 @@ function getWeebCentralChapterArchiveInput(
     );
   }
 
+  const pageStart =
+    outputFormat === "images"
+      ? Number(body.pageStart || 0)
+      : 0;
+
+  const pageLimit =
+    outputFormat === "images" &&
+    body.pageLimit != null
+      ? Number(body.pageLimit)
+      : null;
+
+  if (
+    !Number.isSafeInteger(pageStart) ||
+    pageStart < 0 ||
+    (
+      pageLimit !== null &&
+      (
+        !Number.isSafeInteger(pageLimit) ||
+        pageLimit < 1 ||
+        pageLimit > 200
+      )
+    )
+  ) {
+    throw createRouteError(
+      "Invalid chapter page range",
+      400
+    );
+  }
+
 
   return {
     chapterId,
@@ -5646,6 +5683,8 @@ function getWeebCentralChapterArchiveInput(
         "Chapter"
       ),
     outputFormat,
+    pageStart,
+    pageLimit,
     shouldMerge:
       body.shouldMerge !== false,
     shouldUseRightToLeft:
@@ -5657,7 +5696,8 @@ function getWeebCentralChapterArchiveInput(
 
 function writeChapterImagesToZip(
   images,
-  session
+  session,
+  pageStart
 ) {
 
   const pages =
@@ -5669,7 +5709,7 @@ function writeChapterImagesToZip(
             : "png";
         const fileName =
           "pages/page_" +
-          String(index + 1)
+          String(pageStart + index + 1)
             .padStart(4, "0") +
           "." + extension;
 
@@ -6527,7 +6567,9 @@ function parseWeebCentralChapters(
 
 
 async function downloadWeebCentralChapterImages(
-  chapterId
+  chapterId,
+  pageStart = 0,
+  pageLimit = null
 ) {
 
   const imageUrls =
@@ -6535,17 +6577,30 @@ async function downloadWeebCentralChapterImages(
       chapterId
     );
 
-  return mapWithConcurrency(
-    imageUrls,
+  const selectedUrls =
+    pageLimit === null
+      ? imageUrls
+      : imageUrls.slice(
+          pageStart,
+          pageStart + pageLimit
+        );
+
+  const images = await mapWithConcurrency(
+    selectedUrls,
     WEEBCENTRAL_IMAGE_CONCURRENCY,
     function (imageUrl, index) {
       return downloadWeebCentralChapterImage(
         imageUrl,
         chapterId,
-        index
+        pageStart + index
       );
     }
   );
+
+  return {
+    images,
+    totalCount: imageUrls.length
+  };
 
 }
 
