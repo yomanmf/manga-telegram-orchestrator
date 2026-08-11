@@ -38,6 +38,7 @@ import {
   kindleDocumentTitle
 } from "./kindle-metadata.mjs";
 import { canRecycleIdleUploader } from "./idle-recycle.mjs";
+import { publicRequestBaseUrl } from "./public-url.mjs";
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || "/data";
@@ -243,7 +244,7 @@ app.post("/api/connect-token", requireApiSecret, async (_req, res) => {
     await ensureSendToKindlePage();
 
     res.json({
-      url: PUBLIC_BASE_URL + "/connect?token=" +
+      url: publicRequestBaseUrl(_req, PUBLIC_BASE_URL) + "/connect?token=" +
         encodeURIComponent(token),
       expiresAt: new Date(expiresAt).toISOString()
     });
@@ -306,10 +307,10 @@ app.post(
     res.json({
       jobId: id,
       uploadUrl:
-        PUBLIC_BASE_URL + "/upload/" + id +
+        publicRequestBaseUrl(req, PUBLIC_BASE_URL) + "/upload/" + id +
         "?token=" + encodeURIComponent(token),
       statusUrl:
-        PUBLIC_BASE_URL + "/upload/" + id +
+        publicRequestBaseUrl(req, PUBLIC_BASE_URL) + "/upload/" + id +
         "/status?token=" + encodeURIComponent(token),
       expiresAt: new Date(expiresAt).toISOString()
     });
