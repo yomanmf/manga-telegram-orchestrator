@@ -34,7 +34,8 @@ export function createKindleClient({ baseUrl, sharedSecret }) {
           deferQueue: Boolean(options.deferStart)
         })
       });
-      const upload = await fetch(ticket.uploadUrl, {
+      const uploadUrl = new URL(ticket.uploadUrl);
+      const upload = await fetch(`${url}${uploadUrl.pathname}${uploadUrl.search}`, {
         method: "PUT",
         headers: { "Content-Type": contentType, "Content-Length": String(size) },
         body: fs.createReadStream(filePath),
