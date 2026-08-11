@@ -150,17 +150,19 @@ export class Orchestrator {
       const canResume = initialJob.status === "resume_pending" &&
         job.seriesUrl && job.seriesTitle && job.chapterManifest.length > 0 &&
         await isNonEmptyFile(coverPath);
+      const series = await this.mangaApp.loadSeries(job.seriesUrl);
+      const chapters = selectChapterRange(series.chapters, job.fromChapter, job.toChapter);
+      job = this.store.updateJob(job.id, {
+        seriesTitle: series.title,
+        chapterManifest: chapters
+      });
       if (canResume) {
         job = this.store.updateJob(job.id, {
-          progress: `Возобновляю сохранённый диапазон (${job.chapterManifest.length} глав)`
+          progress: `Возобновляю обновлённый диапазон (${chapters.length} глав)`
         });
         await this.sendProgress(job.id, downloadProgress(job, job.progress));
       } else {
-        const series = await this.mangaApp.loadSeries(job.seriesUrl);
-        const chapters = selectChapterRange(series.chapters, job.fromChapter, job.toChapter);
         job = this.store.updateJob(job.id, {
-          seriesTitle: series.title,
-          chapterManifest: chapters,
           progress: `Зафиксирован диапазон: ${chapters[0].title} — ${chapters.at(-1).title} (${chapters.length} глав)`
         });
         await this.sendProgress(job.id, downloadProgress(job, job.progress));

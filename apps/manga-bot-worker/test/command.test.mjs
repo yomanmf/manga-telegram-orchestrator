@@ -433,6 +433,7 @@ test("retry resumes from completed chapter checkpoints", async () => {
   const directory = `/tmp/manga-orchestrator-resume-test-${Date.now()}-${Math.random()}`;
   const store = createStore(directory);
   const processed = [];
+  let seriesLoads = 0;
   let failSecondChapter = true;
   const orchestrator = new Orchestrator({
     store,
@@ -440,6 +441,7 @@ test("retry resumes from completed chapter checkpoints", async () => {
     mangaApp: {
       async search() { return { results: [{ title: "Resume", url: "/resume" }] }; },
       async loadSeries() {
+        seriesLoads += 1;
         return {
           title: "Resume",
           coverUrl: "https://images.example.test/resume.png",
@@ -483,6 +485,7 @@ test("retry resumes from completed chapter checkpoints", async () => {
 
   const completed = store.latestJob("10");
   assert.equal(completed.status, "completed");
+  assert.equal(seriesLoads, 2);
   assert.deepEqual(processed, ["one", "two", "two"]);
   await assert.rejects(fs.access(`${directory}/work/${completed.id}`), /ENOENT/);
 });
