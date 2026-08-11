@@ -534,3 +534,30 @@ test("cleans the job workspace after cancellation during processing", async () =
   assert.equal(job.status, "cancelled");
   await assert.rejects(fs.access(`${directory}/work/${job.id}`), /ENOENT/);
 });
+
+test("prunes abandoned workspaces while retaining one recent retry", async () => {
+  const directory = `/tmp/manga-orchestrator-prune-test-${Date.now()}-${Math.random()}`;
+  const store = createStore(directory);
+  const orchestrator = new Orchestrator({
+    store,
+    telegram: {},
+    mangaApp: {},
+    kindle: {},
+    maxPdfBytes: 10_000_000,
+    tempRoot: `${directory}/work`
+  });
+  const old = `${directory}/work/old`;
+  const previous = `${directory}/work/previous`;
+  const recent = `${directory}/work/recent`;
+  await Promise.all([old, previous, recent].map((entry) => fs.mkdir(entry, { recursive: true })));
+  const now = Date.now();
+  await fs.utimes(old, new Date(now - 2 * 60 * 60 * 1000), new Date(now - 2 * 60 * 60 * 1000));
+  await fs.utimes(previous, new Date(now - 2000), new Date(now - 2000));
+  await fs.utimes(recent, new Date(now - 1000), new Date(now - 1000));
+
+  await orchestrator.tick();
+
+  await fs.access(recent);
+  await assert.rejects(fs.access(old), /ENOENT/);
+  await assert.rejects(fs.access(previous), /ENOENT/);
+});

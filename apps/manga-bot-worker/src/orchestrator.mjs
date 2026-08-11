@@ -7,6 +7,8 @@ import { cleanTitle, helpText, normalizeTitle, parseCommand } from "./command.mj
 import { selectChapterRange } from "./chapters.mjs";
 import { choicesKeyboard } from "./telegram.mjs";
 
+const RETRY_WORKSPACE_TTL_MS = 60 * 60 * 1000;
+
 export class Orchestrator {
   constructor({
     store,
@@ -125,6 +127,7 @@ export class Orchestrator {
     this.running = true;
     try {
       const job = this.store.nextActiveJob();
+      await this.pruneWorkspaces(job?.id);
       if (!job) return;
       if (job.status === "delivering" || job.status === "waiting_auth") {
         await this.reconcileDelivery(job);
@@ -140,7 +143,6 @@ export class Orchestrator {
     let job = initialJob;
     const workDir = path.join(this.tempRoot, initialJob.id);
     try {
-      await this.pruneWorkspaces(initialJob.id);
       job = this.store.updateJob(job.id, { status: "processing", error: null, progress: "Определяю произведение" });
       await this.sendProgress(job.id, downloadProgress(job, job.progress));
 
@@ -241,6 +243,7 @@ export class Orchestrator {
       console.error("Manga job failed", error);
       const message = errorMessage(error);
       this.store.updateJob(initialJob.id, { status: "failed", error: message, progress: "Ошибка" });
+      await fs.utimes(workDir, new Date(), new Date()).catch(() => {});
       this.completeAnalytics(latest || initialJob, "error", null, message);
       await this.sendProgress(initialJob.id, `❌ Не удалось скачать ${jobTitle(latest || initialJob)}: ${message}\n/retry — повторить.`);
     } finally {
@@ -478,9 +481,17 @@ export class Orchestrator {
   async pruneWorkspaces(activeJobId) {
     await fs.mkdir(this.tempRoot, { recursive: true });
     const entries = await fs.readdir(this.tempRoot, { withFileTypes: true });
-    await Promise.all(entries
+    const inactive = await Promise.all(entries
       .filter((entry) => entry.isDirectory() && entry.name !== activeJobId)
-      .map((entry) => fs.rm(path.join(this.tempRoot, entry.name), { recursive: true, force: true })));
+      .map(async (entry) => ({
+        path: path.join(this.tempRoot, entry.name),
+        mtimeMs: (await fs.stat(path.join(this.tempRoot, entry.name))).mtimeMs
+      })));
+    inactive.sort((left, right) => right.mtimeMs - left.mtimeMs);
+    const cutoff = Date.now() - RETRY_WORKSPACE_TTL_MS;
+    await Promise.all(inactive
+      .filter((entry, index) => activeJobId || index > 0 || entry.mtimeMs < cutoff)
+      .map((entry) => fs.rm(entry.path, { recursive: true, force: true })));
   }
 
   async mergeVerticalPages(chatId, enabled) {
