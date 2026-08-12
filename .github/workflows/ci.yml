@@ -153,7 +153,10 @@ jobs:
         run: |
           jq -r '.[]' <<<"$SERVICES_JSON" | while read -r service; do
             image="cr.yandex/$REGISTRY_ID/$service"
-            docker buildx imagetools create --tag "$image:candidate" "$image:$GITHUB_SHA"
+            docker buildx imagetools create --prefer-index=false --tag "$image:candidate" "$image:$GITHUB_SHA"
+            immutable=$(docker buildx imagetools inspect "$image:$GITHUB_SHA" --format '{{json .Manifest.Digest}}')
+            candidate=$(docker buildx imagetools inspect "$image:candidate" --format '{{json .Manifest.Digest}}')
+            [[ "$candidate" == "$immutable" ]]
           done
       - name: Exchange GitHub OIDC token for Yandex IAM token
         env:
