@@ -418,3 +418,32 @@ test("reuses a resolved cover for chapters from the same volume", async () => {
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test("uses an explicit source volume instead of treating it as a chapter", async () => {
+  const directory = `/tmp/manga-explicit-volume-test-${Date.now()}-${Math.random()}`;
+  await fs.mkdir(directory, { recursive: true });
+  let mangaDexCalls = 0;
+  const fetchImpl = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.mangadex.org") mangaDexCalls += 1;
+    if (url.hostname === "itunes.apple.com") return jsonResponse({ results: [{
+      kind: "ebook", trackName: "One Piece, Vol. 7", genres: ["Manga"],
+      artworkUrl100: "https://is1-ssl.mzstatic.com/image/thumb/volume-7/100x100bb.jpg"
+    }] });
+    if (url.hostname.endsWith("mzstatic.com")) {
+      return new Response(ONE_PIXEL_PNG, { status: 200, headers: { "Content-Type": "image/png" } });
+    }
+    return new Response("", { status: 404 });
+  };
+
+  try {
+    const cover = await resolveEnglishChapterCover({
+      fetchImpl, title: "One Piece", chapterLabel: "Volume 7",
+      fallbackCoverPath: "/tmp/fallback.jpg", destinationDir: directory
+    });
+    assert.equal(cover.volume, "7");
+    assert.equal(mangaDexCalls, 0);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});

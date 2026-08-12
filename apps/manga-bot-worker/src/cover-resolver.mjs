@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { parseChapterLabel } from "./chapters.mjs";
+import { parseChapterLabel, parseVolumeLabel } from "./chapters.mjs";
 import { imageInfo } from "./epub.mjs";
 
 const MAX_COVER_BYTES = 12 * 1024 * 1024;
@@ -605,7 +605,8 @@ export async function resolveEnglishChapterCover({
     return { coverPath: fallbackCoverPath, source: "series fallback", volume: null, chapterNumber };
   }
   try {
-    const volume = await resolveMangaVolume({ fetchImpl, title, chapterNumber });
+    const volume = parseVolumeLabel(chapterLabel) ||
+      await resolveMangaVolume({ fetchImpl, title, chapterNumber });
     if (!volume) return { coverPath: fallbackCoverPath, source: "series fallback", volume: null, chapterNumber };
     if (volumeCache?.has(volume)) return { ...volumeCache.get(volume), chapterNumber };
     const cover = await resolveEnglishVolumeCover({ fetchImpl, title, volume });

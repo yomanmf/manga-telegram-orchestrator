@@ -7,6 +7,11 @@ export function parseChapterLabel(label) {
   return match ? match[1].replace(",", ".") : null;
 }
 
+export function parseVolumeLabel(label) {
+  const match = String(label || "").trim().match(/(?:volume|vol[.]?|том)\s*([\d]+(?:[.,]\d+)?)/i);
+  return match ? match[1].replace(",", ".") : null;
+}
+
 export function compareChapterNumbers(a, b) {
   const [aMajor, aMinor = ""] = String(a).split(".");
   const [bMajor, bMinor = ""] = String(b).split(".");
