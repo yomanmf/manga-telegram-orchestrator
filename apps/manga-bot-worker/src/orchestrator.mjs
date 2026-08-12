@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { boundedInteger, mapWithConcurrency } from "./concurrency.mjs";
+import { resolveEnglishChapterCover } from "./cover-resolver.mjs";
 import { buildKindleImageVolumesInSubprocess } from "./pdf-subprocess.mjs";
 import { cleanTitle, helpText, normalizeTitle, parseCommand } from "./command.mjs";
 import { selectChapterRange } from "./chapters.mjs";
@@ -19,6 +20,7 @@ export class Orchestrator {
     chapterProcessingConcurrency = 1,
     epubBuildConcurrency = 2,
     kindleUploadConcurrency = 2,
+    coverResolver = resolveEnglishChapterCover,
     tempRoot = "/data/manga-jobs"
   }) {
     this.store = store;
@@ -41,6 +43,7 @@ export class Orchestrator {
       2,
       { min: 1, max: 4 }
     );
+    this.coverResolver = coverResolver;
     this.tempRoot = tempRoot;
     this.running = false;
     this.timer = null;
@@ -184,6 +187,7 @@ export class Orchestrator {
 
       const batchId = job.id;
       let queued = [...job.kindleJobs];
+      const volumeCoverCache = new Map();
       for (let index = 0; index < job.chapterManifest.length; index += 1) {
         const chapter = job.chapterManifest[index];
         const chapterDir = path.join(workDir, "chapters", String(index + 1).padStart(4, "0"));
@@ -199,6 +203,14 @@ export class Orchestrator {
           progress: `Собираю Kindle EPUB ${index + 1}–${index + sources.length}/${job.chapterManifest.length}`
         });
         await this.sendProgress(job.id, downloadProgress(job, job.progress));
+        const chapterCover = await this.coverResolver({
+          title: job.seriesTitle,
+          chapterLabel: chapter.title,
+          fallbackCoverPath: coverPath,
+          destinationDir: workDir,
+          index,
+          volumeCache: volumeCoverCache
+        });
         const volumeDir = path.join(workDir, "volumes", String(index + 1).padStart(4, "0"));
         const volumes = await buildKindleImageVolumesInSubprocess({
           sources,
@@ -206,7 +218,8 @@ export class Orchestrator {
           baseName: job.seriesTitle,
           maxBytes: this.maxPdfBytes,
           mergeVerticalPages: job.mergeVerticalPages,
-          coverPath,
+          coverPath: chapterCover.coverPath,
+          coverLookup: false,
           consumeSourceImages: true,
           imageRenderConcurrency: this.epubBuildConcurrency,
           epubBuildConcurrency: 1

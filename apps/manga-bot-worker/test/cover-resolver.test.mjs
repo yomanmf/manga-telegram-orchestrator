@@ -370,3 +370,51 @@ test("falls back to the regular manga cover when there is no chapter number", as
   assert.equal(cover.source, "series fallback");
   assert.equal(cover.chapterNumber, null);
 });
+
+test("reuses a resolved cover for chapters from the same volume", async () => {
+  const directory = `/tmp/manga-cover-cache-test-${Date.now()}-${Math.random()}`;
+  await fs.mkdir(directory, { recursive: true });
+  const volumeCache = new Map();
+  let imageDownloads = 0;
+  const fetchImpl = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.mangadex.org" && url.pathname === "/manga") {
+      return jsonResponse({ data: [{ id: "one-piece", attributes: { title: { "ja-ro": "One Piece" } } }] });
+    }
+    if (url.hostname === "api.mangadex.org" && url.pathname.endsWith("/aggregate")) {
+      return jsonResponse({ volumes: { "3": { chapters: { "23": {}, "24": {} } } } });
+    }
+    if (url.hostname === "itunes.apple.com") return jsonResponse({ results: [] });
+    if (url.hostname === "kodansha.us") return new Response("", { status: 404 });
+    if (url.hostname === "openlibrary.org" && url.pathname === "/search.json") {
+      return jsonResponse({ docs: [{ key: "/works/OL1W", title: "ONE PIECE 3" }] });
+    }
+    if (url.hostname === "openlibrary.org" && url.pathname === "/works/OL1W/editions.json") {
+      return jsonResponse({ entries: [{
+        title: "One Piece, Vol. 3", publishers: ["VIZ Media"],
+        languages: [{ key: "/languages/eng" }], isbn_10: ["1591161843"]
+      }] });
+    }
+    if (url.hostname === "dw9to29mmj727.cloudfront.net") {
+      imageDownloads += 1;
+      return new Response(ONE_PIXEL_PNG, { status: 200, headers: { "Content-Type": "image/png" } });
+    }
+    return new Response("", { status: 404 });
+  };
+
+  try {
+    const first = await resolveEnglishChapterCover({
+      fetchImpl, title: "One Piece", chapterLabel: "Chapter 23",
+      fallbackCoverPath: "/tmp/fallback.jpg", destinationDir: directory, volumeCache
+    });
+    const second = await resolveEnglishChapterCover({
+      fetchImpl, title: "One Piece", chapterLabel: "Chapter 24",
+      fallbackCoverPath: "/tmp/fallback.jpg", destinationDir: directory, index: 1, volumeCache
+    });
+    assert.equal(first.coverPath, second.coverPath);
+    assert.equal(second.chapterNumber, "24");
+    assert.equal(imageDownloads, 1);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});

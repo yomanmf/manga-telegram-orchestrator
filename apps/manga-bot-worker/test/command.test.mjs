@@ -22,6 +22,10 @@ function testImagePage() {
   }];
 }
 
+async function seriesCover({ fallbackCoverPath }) {
+  return { coverPath: fallbackCoverPath };
+}
+
 test("parses Russian Kindle range command", () => {
   assert.deepEqual(parseCommand("Отправь мне на Kindle Fable с главы 201 до самой последней"), {
     type: "send", titleQuery: "Fable", fromChapter: "201", toChapter: "latest"
@@ -313,6 +317,7 @@ test("runs a Telegram request through direct image EPUB assembly and Kindle conf
   const directory = `/tmp/manga-orchestrator-test-${Date.now()}-${Math.random()}`;
   const messages = [];
   const processedChapters = [];
+  const coverResolutions = [];
   const enqueueOptions = [];
   let startedBatch = "";
   let failedProgressNotification = false;
@@ -359,6 +364,10 @@ test("runs a Telegram request through direct image EPUB assembly and Kindle conf
   };
   const orchestrator = new Orchestrator({
     store, telegram, mangaApp, kindle, maxPdfBytes: 10_000_000,
+    async coverResolver(options) {
+      coverResolutions.push(options);
+      return seriesCover(options);
+    },
     tempRoot: `${directory}/work`
   });
 
@@ -371,6 +380,8 @@ test("runs a Telegram request through direct image EPUB assembly and Kindle conf
   assert.equal(job.toChapter, "latest");
   assert.equal(job.chapterManifest.length, 4);
   assert.deepEqual(processedChapters, ["Chapter 22", "Chapter 23", "Chapter 24", "Chapter 25"]);
+  assert.equal(coverResolutions.length, 4);
+  assert.ok(coverResolutions.every(({ volumeCache }) => volumeCache === coverResolutions[0].volumeCache));
   assert.equal(job.kindleJobs.length, 4);
   assert.equal(startedBatch, job.id);
   assert.deepEqual(enqueueOptions, Array(4).fill({ batchId: job.id, deferStart: true }));
@@ -420,6 +431,7 @@ test("keeps completed chapter checkpoints after a processing failure", async () 
       async connectToken() { return { url: "https://example.test/connect" }; }
     },
     maxPdfBytes: 10_000_000,
+    coverResolver: seriesCover,
     tempRoot: `${directory}/work`
   });
 
@@ -475,6 +487,7 @@ test("retry resumes from completed chapter checkpoints", async () => {
     },
     maxPdfBytes: 10_000_000,
     chapterProcessingConcurrency: 1,
+    coverResolver: seriesCover,
     tempRoot: `${directory}/work`
   });
 

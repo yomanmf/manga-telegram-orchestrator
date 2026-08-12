@@ -28,6 +28,9 @@ test("builds a live-flow manga artifact without calling Kindle delivery", async 
       builds.push(options);
       return [{ size: 3, oversize: false }];
     },
+    async resolveCover({ fallbackCoverPath }) {
+      return { coverPath: fallbackCoverPath };
+    },
   });
 
   assert.equal(builds.length, 2);

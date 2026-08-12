@@ -3,11 +3,17 @@ import os from "node:os";
 import path from "node:path";
 
 import { createMangaAppClient } from "./manga-app.mjs";
+import { resolveEnglishChapterCover } from "./cover-resolver.mjs";
 import { buildKindleImageVolumesInSubprocess } from "./pdf-subprocess.mjs";
 
 const MAX_BYTES = 150_000_000;
 
-export async function runMangaE2E({ client, build = buildKindleImageVolumesInSubprocess, query = "One Piece" }) {
+export async function runMangaE2E({
+  client,
+  build = buildKindleImageVolumesInSubprocess,
+  resolveCover = resolveEnglishChapterCover,
+  query = "One Piece"
+}) {
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "manga-e2e-"));
   try {
     const search = await client.search(query);
@@ -30,6 +36,7 @@ export async function runMangaE2E({ client, build = buildKindleImageVolumesInSub
 
     let files = 0;
     let sizeBytes = 0;
+    const volumeCoverCache = new Map();
     for (let chapterIndex = 0; chapterIndex < chapters.length; chapterIndex += 1) {
       const sources = await Promise.all(chapters.slice(chapterIndex, chapterIndex + 1).map(async (chapter, offset) => {
         const pages = await client.processChapterImages({
@@ -57,6 +64,14 @@ export async function runMangaE2E({ client, build = buildKindleImageVolumesInSub
         await fs.copyFile(sources[0].pages[0].filePath, coverPath);
         coverReady = true;
       }
+      const chapterCover = await resolveCover({
+        title: series.title,
+        chapterLabel: chapters[chapterIndex].title,
+        fallbackCoverPath: coverPath,
+        destinationDir: workDir,
+        index: chapterIndex,
+        volumeCache: volumeCoverCache
+      });
       const volumeDir = path.join(workDir, `volumes-${chapterIndex + 1}`);
       const volumes = await build({
         sources,
@@ -64,7 +79,7 @@ export async function runMangaE2E({ client, build = buildKindleImageVolumesInSub
         baseName: series.title,
         maxBytes: MAX_BYTES,
         mergeVerticalPages: true,
-        coverPath,
+        coverPath: chapterCover.coverPath,
         coverLookup: false,
         consumeSourceImages: true,
         epubBuildConcurrency: 1,

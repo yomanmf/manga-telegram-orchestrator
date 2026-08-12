@@ -597,7 +597,8 @@ export async function resolveEnglishChapterCover({
   fallbackCoverPath,
   destinationDir,
   index = 0,
-  lookup = true
+  lookup = true,
+  volumeCache
 }) {
   const chapterNumber = parseChapterLabel(chapterLabel);
   if (!lookup || !chapterNumber) {
@@ -606,6 +607,7 @@ export async function resolveEnglishChapterCover({
   try {
     const volume = await resolveMangaVolume({ fetchImpl, title, chapterNumber });
     if (!volume) return { coverPath: fallbackCoverPath, source: "series fallback", volume: null, chapterNumber };
+    if (volumeCache?.has(volume)) return { ...volumeCache.get(volume), chapterNumber };
     const cover = await resolveEnglishVolumeCover({ fetchImpl, title, volume });
     if (!cover) return { coverPath: fallbackCoverPath, source: "series fallback", volume, chapterNumber };
     const outputPath = path.join(
@@ -613,7 +615,9 @@ export async function resolveEnglishChapterCover({
       `.cover-${String(index + 1).padStart(4, "0")}.${cover.info.extension}`
     );
     await fs.writeFile(outputPath, cover.bytes, { mode: 0o600 });
-    return { coverPath: outputPath, source: cover.source, volume, chapterNumber, temporary: true };
+    const result = { coverPath: outputPath, source: cover.source, volume, chapterNumber, temporary: !volumeCache };
+    volumeCache?.set(volume, result);
+    return result;
   } catch (error) {
     console.warn(`English cover lookup failed for ${title} ${chapterLabel}: ${error.message}`);
     return { coverPath: fallbackCoverPath, source: "series fallback", volume: null, chapterNumber };
