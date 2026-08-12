@@ -122,6 +122,7 @@ jobs:
           context: apps/${{ matrix.service }}
           platforms: linux/amd64
           push: ${{ github.event_name == 'push' }}
+          provenance: false
           tags: cr.yandex/${{ vars.YC_REGISTRY_ID }}/${{ matrix.service }}:${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
