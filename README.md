@@ -1,5 +1,7 @@
 # Manga to Kindle Monorepo
 
+> [Open the interactive architecture diagram](docs/architecture.html?raw=1)
+
 The complete production project lives in one repository: Telegram controls,
 the existing manga processing web interface, and browser automation for Send
 to Kindle.
