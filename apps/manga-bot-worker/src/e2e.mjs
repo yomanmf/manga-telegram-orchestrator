@@ -21,7 +21,7 @@ export async function runMangaE2E({
     if (!choice?.url) throw new Error(`No manga found for ${query}`);
 
     const series = await client.loadSeries(choice.url);
-    const chapters = series.chapters || [];
+    const chapters = (series.chapters || []).slice(0, 1);
     if (!chapters[0]?.id) throw new Error("The selected manga has no chapters");
 
     let coverReady = false;

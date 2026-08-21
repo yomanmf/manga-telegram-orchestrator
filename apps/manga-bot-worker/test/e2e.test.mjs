@@ -33,14 +33,14 @@ test("builds a live-flow manga artifact without calling Kindle delivery", async 
     },
   });
 
-  assert.equal(builds.length, 2);
+  assert.equal(builds.length, 1);
   assert.ok(builds.every(({ sources }) => sources.length === 1 && sources[0].pages.length === 1));
   assert.deepEqual(result, {
     ok: true,
     title: "Test Manga",
-    chapters: 2,
-    files: 2,
-    sizeBytes: 6,
+    chapters: 1,
+    files: 1,
+    sizeBytes: 3,
     kindleDelivery: "skipped",
   });
 });
