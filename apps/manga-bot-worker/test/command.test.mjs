@@ -63,6 +63,39 @@ test("parses all available chapters with parentheses in the title", () => {
   });
 });
 
+test("treats a plain manga title as all available chapters", () => {
+  assert.deepEqual(parseCommand("The Enigma of Amigara Fault"), {
+    type: "send",
+    titleQuery: "The Enigma of Amigara Fault",
+    fromChapter: "first",
+    toChapter: "latest"
+  });
+  assert.deepEqual(parseCommand("/unknown"), { type: "unknown", input: "/unknown" });
+});
+
+test("queues manga titles from separate lines in order", async () => {
+  const directory = `/tmp/manga-batch-command-test-${Date.now()}-${Math.random()}`;
+  const store = createStore(directory);
+  const orchestrator = new Orchestrator({
+    store,
+    telegram: { async sendMessage() {}, async answerCallbackQuery() {} },
+    mangaApp: {},
+    kindle: {},
+    maxPdfBytes: 10_000_000,
+    tempRoot: `${directory}/work`
+  });
+
+  await orchestrator.handleMessage({ chat: { id: 7 }, text: "First Manga\nSecond Manga\nThird Manga" });
+
+  const first = store.nextRunnableJob();
+  assert.equal(first.titleQuery, "First Manga");
+  store.updateJob(first.id, { status: "completed" });
+  const second = store.nextRunnableJob();
+  assert.equal(second.titleQuery, "Second Manga");
+  store.updateJob(second.id, { status: "completed" });
+  assert.equal(store.nextRunnableJob().titleQuery, "Third Manga");
+});
+
 test("parses Merge vertical pages commands", () => {
   assert.deepEqual(parseCommand("/merge"), { type: "merge", enabled: null });
   assert.deepEqual(parseCommand("/merge on"), { type: "merge", enabled: true });

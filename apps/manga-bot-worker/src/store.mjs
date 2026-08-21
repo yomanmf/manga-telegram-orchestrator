@@ -74,7 +74,7 @@ class Store {
     const row = this.db.prepare(`
       SELECT * FROM jobs
       WHERE status IN ('queued', 'resume_pending')
-      ORDER BY created_at ASC
+      ORDER BY created_at ASC, rowid ASC
       LIMIT 1
     `).get();
     return row ? hydrateJob(row) : null;
@@ -84,7 +84,7 @@ class Store {
     const row = this.db.prepare(`
       SELECT * FROM jobs
       WHERE status IN ('queued', 'resume_pending', 'delivering', 'waiting_auth')
-      ORDER BY CASE status WHEN 'queued' THEN 0 WHEN 'resume_pending' THEN 0 ELSE 1 END, created_at ASC
+      ORDER BY CASE status WHEN 'queued' THEN 0 WHEN 'resume_pending' THEN 0 ELSE 1 END, created_at ASC, rowid ASC
       LIMIT 1
     `).get();
     return row ? hydrateJob(row) : null;

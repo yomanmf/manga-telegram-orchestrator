@@ -57,7 +57,13 @@ export class Orchestrator {
 
   async handleMessage(message, context = {}) {
     const chatId = String(message.chat?.id || "");
-    const parsed = parseCommand(message.text || "");
+    const lines = String(message.text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const commands = (lines.length ? lines : [""]).map(parseCommand);
+    const parsed = commands.length === 1
+      ? commands[0]
+      : commands.every((command) => command.type === "send")
+        ? { type: "send", items: commands }
+        : { type: "unknown" };
     if (parsed.type === "help" || parsed.type === "unknown") {
       await this.telegram.sendMessage(chatId, parsed.type === "unknown" ? `❓ Не понял команду.\n\n${helpText()}` : helpText());
       return;
@@ -73,18 +79,21 @@ export class Orchestrator {
         await this.telegram.sendMessage(chatId, `⏳ Уже скачиваю ${jobTitle(existing)}.\n${describeJob(existing)}\n/status — детали, /cancel — отменить.`);
         return;
       }
-      const job = this.store.createJob({
-        chatId,
-        status: "queued",
-        titleQuery: parsed.titleQuery,
-        fromChapter: parsed.fromChapter,
-        toChapter: parsed.toChapter,
-        analyticsEventId: context.analyticsEventId || null,
-        mergeVerticalPages: this.store.getMergeVerticalPages(chatId),
-        progress: "Ищу мангу"
-      });
-      await this.sendProgress(job.id, `⬇️ Начинаю скачивать ${parsed.titleQuery}: ${formatChapterRange(parsed.fromChapter, parsed.toChapter)}.`);
-      return { deferred: true, jobId: job.id };
+      const requests = parsed.items || [parsed];
+      const jobs = requests.map((request, index) => this.store.createJob({
+          chatId,
+          status: "queued",
+          titleQuery: request.titleQuery,
+          fromChapter: request.fromChapter,
+          toChapter: request.toChapter,
+          analyticsEventId: index === 0 ? context.analyticsEventId || null : null,
+          mergeVerticalPages: this.store.getMergeVerticalPages(chatId),
+          progress: "Ищу мангу"
+        }));
+      for (const job of jobs) {
+        await this.sendProgress(job.id, `⬇️ ${job === jobs[0] ? "Начинаю скачивать" : "Добавлено в очередь"} ${job.titleQuery}: ${formatChapterRange(job.fromChapter, job.toChapter)}.`);
+      }
+      return { deferred: true, jobId: jobs[0].id };
     }
   }
 

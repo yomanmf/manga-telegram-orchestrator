@@ -63,6 +63,15 @@ export function parseCommand(text) {
     return { type: "help" };
   }
 
+  if (input && !input.startsWith("/")) {
+    return {
+      type: "send",
+      titleQuery: cleanTitle(input),
+      fromChapter: "first",
+      toChapter: "latest"
+    };
+  }
+
   return { type: "unknown", input };
 }
 
@@ -97,7 +106,8 @@ export function helpText() {
     "Пример:",
     "Отправь Fable с 201 до последней",
     "Отправь One Piece (Color) с 23 до 100",
-    "Отправь One Piece (Color) все главы",
+    "One Piece (Color) — все главы",
+    "Несколько названий можно отправить отдельными строками.",
     "",
     "Команды: /status, /cancel, /retry, /kindle, /merge [on|off]"
   ].join("\n");

@@ -167,12 +167,14 @@ Example command:
 ```text
 Send The Fable from chapter 201 to latest
 Отправь One Piece (Color) с 23 до 100
-Отправь One Piece (Color) все главы
+One Piece (Color)
 ```
 
 Both numeric boundaries are inclusive, so the second example processes chapters
 23 through 100. Manga titles may contain spaces and parentheses.
-The `все главы` form automatically uses every available numbered chapter.
+A plain manga title automatically uses every available numbered chapter; the
+explicit `все главы` form remains supported. Put several titles on separate
+lines to queue them for processing in that order.
 
 Available commands include `/status`, `/cancel`, `/retry`, `/kindle`,
 `/merge on`, and `/merge off`. `Merge vertical pages` is enabled by default and
