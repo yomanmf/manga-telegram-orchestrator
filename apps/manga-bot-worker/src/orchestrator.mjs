@@ -197,32 +197,27 @@ export class Orchestrator {
       const batchId = job.id;
       let queued = [...job.kindleJobs];
       const volumeCoverCache = new Map();
-      for (let index = 0; index < job.chapterManifest.length; index += 1) {
-        const chapter = job.chapterManifest[index];
-        const chapterDir = path.join(workDir, "chapters", String(index + 1).padStart(4, "0"));
-        if (await isStagedChapter(chapterDir, chapter)) continue;
-        const sources = await this.processChapters(job, [chapter], index);
-        job = this.store.getJob(job.id);
-        if (job.status === "cancelled") return;
-        if (!await isNonEmptyFile(coverPath)) {
-          await fs.copyFile(sources[0].pages[0].filePath, coverPath);
-        }
-
+      let pending = [];
+      let pendingBytes = 0;
+      const flushPending = async () => {
+        if (pending.length === 0) return;
+        const first = pending[0];
+        const last = pending.at(-1);
         job = this.store.updateJob(job.id, {
-          progress: `Собираю Kindle EPUB ${index + 1}–${index + sources.length}/${job.chapterManifest.length}`
+          progress: `Собираю Kindle EPUB ${first.index + 1}–${last.index + 1}/${job.chapterManifest.length}`
         });
         await this.sendProgress(job.id, downloadProgress(job, job.progress));
         const chapterCover = await this.coverResolver({
           title: job.seriesTitle,
-          chapterLabel: chapter.title,
+          chapterLabel: first.chapter.title,
           fallbackCoverPath: coverPath,
           destinationDir: workDir,
-          index,
+          index: first.index,
           volumeCache: volumeCoverCache
         });
-        const volumeDir = path.join(workDir, "volumes", String(index + 1).padStart(4, "0"));
+        const volumeDir = path.join(workDir, "volumes", String(first.index + 1).padStart(4, "0"));
         const volumes = await buildKindleImageVolumesInSubprocess({
-          sources,
+          sources: pending.map((item) => item.source),
           destinationDir: volumeDir,
           baseName: job.seriesTitle,
           maxBytes: this.maxPdfBytes,
@@ -237,15 +232,43 @@ export class Orchestrator {
           throw new Error("Одна часть превышает безопасный лимит Kindle; требуется разбиение исходной главы");
         }
         queued = await this.enqueueVolumes(this.store.getJob(job.id), volumes, batchId);
-        await fs.rm(chapterDir, { recursive: true, force: true });
-        await fs.mkdir(chapterDir, { recursive: true });
-        await fs.writeFile(
-          path.join(chapterDir, "staged.json"),
-          `${JSON.stringify({ version: 1, chapterId: chapter.id, chapterTitle: chapter.title })}\n`,
-          { mode: 0o600 }
-        );
+        for (const item of pending) {
+          const chapterDir = path.join(workDir, "chapters", String(item.index + 1).padStart(4, "0"));
+          await fs.rm(chapterDir, { recursive: true, force: true });
+          await fs.mkdir(chapterDir, { recursive: true });
+          await fs.writeFile(
+            path.join(chapterDir, "staged.json"),
+            `${JSON.stringify({ version: 1, chapterId: item.chapter.id, chapterTitle: item.chapter.title })}\n`,
+            { mode: 0o600 }
+          );
+        }
         await fs.rm(volumeDir, { recursive: true, force: true });
+        pending = [];
+        pendingBytes = 0;
+      };
+      for (let index = 0; index < job.chapterManifest.length; index += 1) {
+        const chapter = job.chapterManifest[index];
+        const chapterDir = path.join(workDir, "chapters", String(index + 1).padStart(4, "0"));
+        if (await isStagedChapter(chapterDir, chapter)) {
+          await flushPending();
+          continue;
+        }
+        const sources = await this.processChapters(job, [chapter], index);
+        job = this.store.getJob(job.id);
+        if (job.status === "cancelled") return;
+        if (!await isNonEmptyFile(coverPath)) {
+          await fs.copyFile(sources[0].pages[0].filePath, coverPath);
+        }
+        const sourceBytes = (await Promise.all(sources[0].pages.map((page) => fs.stat(page.filePath))))
+          .reduce((total, stat) => total + stat.size, 0);
+        if (pending.length > 0 && pendingBytes + sourceBytes > this.maxPdfBytes) {
+          await flushPending();
+        }
+        pending.push({ chapter, index, source: sources[0] });
+        pendingBytes += sourceBytes;
+        if (pendingBytes >= this.maxPdfBytes) await flushPending();
       }
+      await flushPending();
 
       job = this.store.getJob(job.id);
       if (job.status === "cancelled") return;

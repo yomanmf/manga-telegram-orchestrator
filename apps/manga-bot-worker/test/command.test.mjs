@@ -413,11 +413,11 @@ test("runs a Telegram request through direct image EPUB assembly and Kindle conf
   assert.equal(job.toChapter, "latest");
   assert.equal(job.chapterManifest.length, 4);
   assert.deepEqual(processedChapters, ["Chapter 22", "Chapter 23", "Chapter 24", "Chapter 25"]);
-  assert.equal(coverResolutions.length, 4);
-  assert.ok(coverResolutions.every(({ volumeCache }) => volumeCache === coverResolutions[0].volumeCache));
-  assert.equal(job.kindleJobs.length, 4);
+  assert.equal(coverResolutions.length, 1);
+  assert.equal(job.kindleJobs.length, 1);
+  assert.match(job.kindleJobs[0].filename, /Chapter 22-Chapter 25[.]epub$/);
   assert.equal(startedBatch, job.id);
-  assert.deepEqual(enqueueOptions, Array(4).fill({ batchId: job.id, deferStart: true }));
+  assert.deepEqual(enqueueOptions, [{ batchId: job.id, deferStart: true }]);
   assert.equal(failedProgressNotification, true);
   const chapterProgress = messages.filter(({ text }) => /^⬇️ Скачиваю One Piece \(Color\): обработано \d+\/\d+ глав$/.test(text));
   assert.deepEqual(chapterProgress.map(({ text }) => text.match(/(\d+\/\d+)/)[1]), ["4/4"]);
@@ -475,7 +475,7 @@ test("keeps completed chapter checkpoints after a processing failure", async () 
   assert.equal(job.status, "failed");
   assert.match(job.error, /processor unavailable/);
   await assert.rejects(fs.access(`${directory}/work/stale-job`), /ENOENT/);
-  await fs.access(`${directory}/work/${job.id}/chapters/0001/staged.json`);
+  await fs.access(`${directory}/work/${job.id}/chapters/0001/manifest.json`);
 });
 
 test("retry resumes from completed chapter checkpoints", async () => {
@@ -528,7 +528,7 @@ test("retry resumes from completed chapter checkpoints", async () => {
   await orchestrator.tick();
   const failed = store.latestJob("10");
   assert.equal(failed.status, "failed");
-  await fs.access(`${directory}/work/${failed.id}/chapters/0001/staged.json`);
+  await fs.access(`${directory}/work/${failed.id}/chapters/0001/manifest.json`);
 
   await orchestrator.handleMessage({ chat: { id: 10 }, text: "/retry" });
   await orchestrator.tick();
