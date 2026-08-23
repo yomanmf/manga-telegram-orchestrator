@@ -401,6 +401,7 @@ test("runs a Telegram request through direct image EPUB assembly and Kindle conf
       coverResolutions.push(options);
       return seriesCover(options);
     },
+    coverLookup: false,
     tempRoot: `${directory}/work`
   });
 
@@ -465,6 +466,7 @@ test("keeps completed chapter checkpoints after a processing failure", async () 
     },
     maxPdfBytes: 10_000_000,
     coverResolver: seriesCover,
+    coverLookup: false,
     tempRoot: `${directory}/work`
   });
 
@@ -521,6 +523,7 @@ test("retry resumes from completed chapter checkpoints", async () => {
     maxPdfBytes: 10_000_000,
     chapterProcessingConcurrency: 1,
     coverResolver: seriesCover,
+    coverLookup: false,
     tempRoot: `${directory}/work`
   });
 

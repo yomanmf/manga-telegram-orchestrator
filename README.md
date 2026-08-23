@@ -148,8 +148,9 @@ address when the address returned by cloud DNS is unreachable from the VM. The
 override is applied only to `manga-bot-worker`; the bot token still goes directly
 to Telegram and never passes through a third-party proxy.
 
-The bot starts a new EPUB volume after 150 MB of rendered page assets, leaving
-room for its cover and package metadata below the uploader's 200 MB hard limit.
+The bot fills each EPUB with up to 185 MiB of rendered page assets, splitting a
+chapter when needed. Only the final EPUB may be materially smaller; covers and
+package metadata remain below the uploader's 200 MB hard limit.
 
 ## Telegram
 

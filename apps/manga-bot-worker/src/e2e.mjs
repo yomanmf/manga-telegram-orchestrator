@@ -6,7 +6,7 @@ import { createMangaAppClient } from "./manga-app.mjs";
 import { resolveEnglishChapterCover } from "./cover-resolver.mjs";
 import { buildKindleImageVolumesInSubprocess } from "./pdf-subprocess.mjs";
 
-const MAX_BYTES = 150_000_000;
+const MAX_BYTES = 185 * 1024 * 1024;
 
 export async function runMangaE2E({
   client,

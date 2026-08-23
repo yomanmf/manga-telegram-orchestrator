@@ -129,3 +129,45 @@ test("builds a compact Kindle-compatible EPUB without recompressing JPEG inputs"
     for (const item of source.pages) await assert.rejects(fs.access(item.filePath), /ENOENT/);
   }
 });
+
+test("fills non-final EPUBs by splitting chapters", async () => {
+  const directory = `/tmp/manga-filled-epub-test-${Date.now()}-${Math.random()}`;
+  const inputDir = path.join(directory, "input");
+  await fs.mkdir(inputDir, { recursive: true });
+  const image = await sharp({
+    create: { width: 10, height: 20, channels: 3, background: "#fff" }
+  }).jpeg({ quality: 70 }).toBuffer();
+  const sources = [
+    { name: "chapter-one", chapterTitle: "Chapter 1", pages: [] },
+    { name: "chapter-two", chapterTitle: "Chapter 2", pages: [] }
+  ];
+  for (let index = 0; index < 10; index += 1) {
+    const filePath = path.join(inputDir, `page-${index + 1}.jpg`);
+    await fs.writeFile(filePath, image);
+    sources[index < 7 ? 0 : 1].pages.push({ filePath, width: 10, height: 20, format: "jpg" });
+  }
+  const coverPath = path.join(inputDir, "cover.jpg");
+  await fs.writeFile(coverPath, image);
+
+  const volumes = await buildKindleImageVolumes({
+    sources,
+    destinationDir: path.join(directory, "out"),
+    baseName: "Filled",
+    maxBytes: image.length * 4,
+    mergeVerticalPages: false,
+    coverPath,
+    coverLookup: false,
+    epubBuildConcurrency: 1
+  });
+  const pageCounts = await Promise.all(volumes.map(async (volume) => {
+    const archive = await JSZip.loadAsync(await fs.readFile(volume.filePath));
+    return Object.keys(archive.files).filter((name) => /^OEBPS\/images\/page-/.test(name)).length;
+  }));
+
+  assert.deepEqual(pageCounts, [4, 4, 2]);
+  assert.deepEqual(volumes.map((volume) => volume.sources), [
+    ["chapter-one"],
+    ["chapter-one", "chapter-two"],
+    ["chapter-two"]
+  ]);
+});

@@ -12,8 +12,8 @@ import { createStore } from "./store.mjs";
 import { createTelegram } from "./telegram.mjs";
 import { isOwnerPrivateUpdate } from "./telegram-auth.mjs";
 
-const DEFAULT_MAX_PDF_BYTES = 150_000_000;
-const MAX_ALLOWED_PDF_BYTES = 150_000_000;
+const DEFAULT_MAX_PDF_BYTES = 185 * 1024 * 1024;
+const MAX_ALLOWED_PDF_BYTES = 185 * 1024 * 1024;
 let shuttingDown = false;
 
 await loadAnalyticsLockbox();
@@ -170,7 +170,7 @@ function readConfig(env) {
     )
   };
   if (!Number.isFinite(config.maxPdfBytes) || config.maxPdfBytes < 10_000_000 || config.maxPdfBytes > MAX_ALLOWED_PDF_BYTES) {
-    throw new Error("MAX_PDF_BYTES must be between 10 MB and 150 MB");
+    throw new Error("MAX_PDF_BYTES must be between 10 MB and 185 MiB");
   }
   if (config.ownerUserId && (!/^\d+$/.test(config.ownerUserId) || !Number.isSafeInteger(Number(config.ownerUserId)) || Number(config.ownerUserId) <= 0)) {
     throw new Error("TELEGRAM_OWNER_USER_ID must be a positive Telegram user id");

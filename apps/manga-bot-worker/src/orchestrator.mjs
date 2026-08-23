@@ -21,6 +21,7 @@ export class Orchestrator {
     epubBuildConcurrency = 2,
     kindleUploadConcurrency = 2,
     coverResolver = resolveEnglishChapterCover,
+    coverLookup = true,
     tempRoot = "/data/manga-jobs"
   }) {
     this.store = store;
@@ -44,6 +45,7 @@ export class Orchestrator {
       { min: 1, max: 4 }
     );
     this.coverResolver = coverResolver;
+    this.coverLookup = coverLookup;
     this.tempRoot = tempRoot;
     this.running = false;
     this.timer = null;
@@ -195,80 +197,44 @@ export class Orchestrator {
       }
 
       const batchId = job.id;
-      let queued = [...job.kindleJobs];
-      const volumeCoverCache = new Map();
-      let pending = [];
-      let pendingBytes = 0;
-      const flushPending = async () => {
-        if (pending.length === 0) return;
-        const first = pending[0];
-        const last = pending.at(-1);
-        job = this.store.updateJob(job.id, {
-          progress: `Собираю Kindle EPUB ${first.index + 1}–${last.index + 1}/${job.chapterManifest.length}`
-        });
-        await this.sendProgress(job.id, downloadProgress(job, job.progress));
-        const chapterCover = await this.coverResolver({
+      const sources = await this.processChapters(job);
+      job = this.store.getJob(job.id);
+      if (job.status === "cancelled") return;
+      if (!await isNonEmptyFile(coverPath)) {
+        await fs.copyFile(sources[0].pages[0].filePath, coverPath);
+      }
+      job = this.store.updateJob(job.id, {
+        progress: `Собираю Kindle EPUB из ${job.chapterManifest.length} глав`
+      });
+      await this.sendProgress(job.id, downloadProgress(job, job.progress));
+      const chapterCover = this.coverLookup
+        ? { coverPath }
+        : await this.coverResolver({
           title: job.seriesTitle,
-          chapterLabel: first.chapter.title,
+          chapterLabel: job.chapterManifest[0].title,
           fallbackCoverPath: coverPath,
           destinationDir: workDir,
-          index: first.index,
-          volumeCache: volumeCoverCache
+          index: 0,
+          volumeCache: new Map()
         });
-        const volumeDir = path.join(workDir, "volumes", String(first.index + 1).padStart(4, "0"));
-        const volumes = await buildKindleImageVolumesInSubprocess({
-          sources: pending.map((item) => item.source),
-          destinationDir: volumeDir,
-          baseName: job.seriesTitle,
-          maxBytes: this.maxPdfBytes,
-          mergeVerticalPages: job.mergeVerticalPages,
-          coverPath: chapterCover.coverPath,
-          coverLookup: false,
-          consumeSourceImages: true,
-          imageRenderConcurrency: this.epubBuildConcurrency,
-          epubBuildConcurrency: 1
-        });
-        if (volumes.some((volume) => volume.oversize)) {
-          throw new Error("Одна часть превышает безопасный лимит Kindle; требуется разбиение исходной главы");
-        }
-        queued = await this.enqueueVolumes(this.store.getJob(job.id), volumes, batchId);
-        for (const item of pending) {
-          const chapterDir = path.join(workDir, "chapters", String(item.index + 1).padStart(4, "0"));
-          await fs.rm(chapterDir, { recursive: true, force: true });
-          await fs.mkdir(chapterDir, { recursive: true });
-          await fs.writeFile(
-            path.join(chapterDir, "staged.json"),
-            `${JSON.stringify({ version: 1, chapterId: item.chapter.id, chapterTitle: item.chapter.title })}\n`,
-            { mode: 0o600 }
-          );
-        }
-        await fs.rm(volumeDir, { recursive: true, force: true });
-        pending = [];
-        pendingBytes = 0;
-      };
-      for (let index = 0; index < job.chapterManifest.length; index += 1) {
-        const chapter = job.chapterManifest[index];
-        const chapterDir = path.join(workDir, "chapters", String(index + 1).padStart(4, "0"));
-        if (await isStagedChapter(chapterDir, chapter)) {
-          await flushPending();
-          continue;
-        }
-        const sources = await this.processChapters(job, [chapter], index);
-        job = this.store.getJob(job.id);
-        if (job.status === "cancelled") return;
-        if (!await isNonEmptyFile(coverPath)) {
-          await fs.copyFile(sources[0].pages[0].filePath, coverPath);
-        }
-        const sourceBytes = (await Promise.all(sources[0].pages.map((page) => fs.stat(page.filePath))))
-          .reduce((total, stat) => total + stat.size, 0);
-        if (pending.length > 0 && pendingBytes + sourceBytes > this.maxPdfBytes) {
-          await flushPending();
-        }
-        pending.push({ chapter, index, source: sources[0] });
-        pendingBytes += sourceBytes;
-        if (pendingBytes >= this.maxPdfBytes) await flushPending();
+      const volumeDir = path.join(workDir, "volumes");
+      const volumes = await buildKindleImageVolumesInSubprocess({
+        sources,
+        destinationDir: volumeDir,
+        baseName: job.seriesTitle,
+        maxBytes: this.maxPdfBytes,
+        mergeVerticalPages: job.mergeVerticalPages,
+        coverPath: chapterCover.coverPath,
+        coverLookup: this.coverLookup,
+        consumeSourceImages: true,
+        imageRenderConcurrency: this.epubBuildConcurrency,
+        epubBuildConcurrency: this.epubBuildConcurrency
+      });
+      if (volumes.some((volume) => volume.oversize)) {
+        throw new Error("Одна часть превышает безопасный лимит Kindle");
       }
-      await flushPending();
+      const queued = await this.enqueueVolumes(this.store.getJob(job.id), volumes, batchId);
+      await fs.rm(volumeDir, { recursive: true, force: true });
 
       job = this.store.getJob(job.id);
       if (job.status === "cancelled") return;
@@ -669,15 +635,6 @@ async function readChapterCheckpoint(chapterDir, chapter) {
     return { name: chapter.title, chapterTitle: chapter.title, pages };
   } catch {
     return null;
-  }
-}
-
-async function isStagedChapter(chapterDir, chapter) {
-  try {
-    const marker = JSON.parse(await fs.readFile(path.join(chapterDir, "staged.json"), "utf8"));
-    return marker.version === 1 && marker.chapterId === chapter.id && marker.chapterTitle === chapter.title;
-  } catch {
-    return false;
   }
 }
 
