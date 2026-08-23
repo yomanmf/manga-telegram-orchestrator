@@ -9,6 +9,8 @@ import { selectChapterRange } from "./chapters.mjs";
 import { choicesKeyboard } from "./telegram.mjs";
 
 const RETRY_WORKSPACE_TTL_MS = 60 * 60 * 1000;
+const ACTIVE_STATUSES = ["queued", "resume_pending", "processing", "delivering", "waiting_auth", "waiting_choice"];
+const CANCELLABLE_STATUSES = ["queued", "resume_pending", "processing", "waiting_auth", "waiting_choice"];
 
 export class Orchestrator {
   constructor({
@@ -76,7 +78,7 @@ export class Orchestrator {
     if (parsed.type === "kindle") return this.sendKindleConnectUrl(chatId);
     if (parsed.type === "merge") return this.mergeVerticalPages(chatId, parsed.enabled);
     if (parsed.type === "send") {
-      const existing = this.store.latestJob(chatId, ["queued", "resume_pending", "processing", "delivering", "waiting_auth", "waiting_choice"]);
+      const existing = this.store.latestJob(chatId, ACTIVE_STATUSES);
       if (existing) {
         await this.telegram.sendMessage(chatId, `⏳ Уже скачиваю ${jobTitle(existing)}.\n${describeJob(existing)}\n/status — детали, /cancel — отменить.`);
         return;
@@ -102,6 +104,24 @@ export class Orchestrator {
   async handleCallback(callback) {
     const chatId = String(callback.message?.chat?.id || "");
     const data = String(callback.data || "");
+    const cancellation = data.match(/^cancel:([\w-]+)$/);
+    if (cancellation) {
+      const job = this.store.cancelJob(chatId, cancellation[1]);
+      if (!job) return this.telegram.answerCallbackQuery(callback.id, "⏳ Задание уже недоступно");
+      this.completeAnalytics(job, "cancelled", "Отменено пользователем");
+      await this.telegram.answerCallbackQuery(callback.id, "🛑 Отменено");
+      const messageId = Number(callback.message?.message_id);
+      if (Number.isInteger(messageId) && messageId > 0 && typeof this.telegram.editMessage === "function") {
+        try {
+          await this.telegram.editMessage(chatId, messageId, `🛑 Скачивание ${jobTitle(job)} отменено.`, {
+            reply_markup: { inline_keyboard: [] }
+          });
+        } catch (error) {
+          console.error("Cannot replace Telegram cancellation keyboard with confirmation", error);
+        }
+      }
+      return this.sendProgress(job.id, `🛑 Скачивание ${jobTitle(job)} отменено. Уже переданные в Amazon файлы нельзя отозвать автоматически.`);
+    }
     const match = data.match(/^choose:([\w-]+):(\d+)$/);
     if (!match) return this.telegram.answerCallbackQuery(callback.id, "❌ Неизвестное действие");
     const job = this.store.getJob(match[1]);
@@ -438,10 +458,14 @@ export class Orchestrator {
   }
 
   async sendStatus(chatId) {
-    const job = this.store.latestJob(chatId);
-    if (!job) return this.telegram.sendMessage(chatId, "ℹ️ Заданий пока нет.");
-    const files = await this.describeKindleFiles(job.kindleJobs);
-    await this.telegram.sendMessage(chatId, `ℹ️ ${jobTitle(job)}\n${describeJob(job)}${files ? `\n${files}` : ""}${job.error ? `\nОшибка: ${job.error}` : ""}`);
+    const active = this.store.listJobs(chatId, ACTIVE_STATUSES);
+    const jobs = active.length ? active : [this.store.latestJob(chatId)].filter(Boolean);
+    if (!jobs.length) return this.telegram.sendMessage(chatId, "ℹ️ Заданий пока нет.");
+    const details = await Promise.all(jobs.map(async (job) => {
+      const files = await this.describeKindleFiles(job.kindleJobs);
+      return `${jobTitle(job)}\n${describeJob(job)}${files ? `\n${files}` : ""}${job.error ? `\nОшибка: ${job.error}` : ""}`;
+    }));
+    await this.telegram.sendMessage(chatId, `ℹ️ ${jobs.length > 1 ? `Активных заданий: ${jobs.length}\n\n${details.map((text, index) => `${index + 1}. ${text}`).join("\n\n")}` : details[0]}`);
   }
 
   async describeKindleFiles(entries) {
@@ -460,7 +484,14 @@ export class Orchestrator {
   }
 
   async cancel(chatId) {
-    const job = this.store.cancelLatest(chatId);
+    const jobs = this.store.listJobs(chatId, CANCELLABLE_STATUSES);
+    if (jobs.length > 1) {
+      await this.telegram.sendMessage(chatId, "Какое задание отменить?", {
+        reply_markup: cancelKeyboard(jobs)
+      });
+      return;
+    }
+    const job = jobs[0] && this.store.cancelJob(chatId, jobs[0].id);
     if (job) {
       this.completeAnalytics(job, "cancelled", "Отменено пользователем");
       await this.sendProgress(job.id, `🛑 Скачивание ${jobTitle(job)} отменено. Уже переданные в Amazon файлы нельзя отозвать автоматически.`);
@@ -665,6 +696,14 @@ function errorMessage(error) {
 function isWebControlJob(job) { return String(job.chatId || "").startsWith("web:"); }
 function formatMegabytes(bytes) { return `${(Number(bytes) / 1_000_000).toFixed(1)} МБ`; }
 function jobTitle(job) { return job.seriesTitle || job.titleQuery; }
+function cancelKeyboard(jobs) {
+  return {
+    inline_keyboard: jobs.map((job) => [{
+      text: String(jobTitle(job)).slice(0, 56),
+      callback_data: `cancel:${job.id}`
+    }])
+  };
+}
 function downloadProgress(job, progress) {
   const normalized = String(progress).replace(/^[А-ЯЁ]/u, (letter) => letter.toLocaleLowerCase("ru-RU"));
   return `${progressEmoji(progress)} Скачиваю ${jobTitle(job)}: ${normalized}.`;

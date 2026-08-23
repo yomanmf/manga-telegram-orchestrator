@@ -70,6 +70,15 @@ class Store {
     return row ? hydrateJob(row) : null;
   }
 
+  listJobs(chatId, statuses) {
+    const placeholders = statuses.map(() => "?").join(",");
+    return this.db.prepare(`
+      SELECT * FROM jobs
+      WHERE chat_id = ? AND status IN (${placeholders})
+      ORDER BY created_at ASC, rowid ASC
+    `).all(String(chatId), ...statuses).map(hydrateJob);
+  }
+
   nextRunnableJob() {
     const row = this.db.prepare(`
       SELECT * FROM jobs
@@ -122,6 +131,12 @@ class Store {
   cancelLatest(chatId) {
     const job = this.latestJob(chatId, ["queued", "resume_pending", "waiting_choice", "waiting_auth", "processing"]);
     if (!job) return null;
+    return this.cancelJob(chatId, job.id);
+  }
+
+  cancelJob(chatId, id) {
+    const job = this.getJob(id);
+    if (!job || job.chatId !== String(chatId) || !["queued", "resume_pending", "waiting_choice", "waiting_auth", "processing"].includes(job.status)) return null;
     return this.updateJob(job.id, { status: "cancelled", progress: "Отменено пользователем" });
   }
 
