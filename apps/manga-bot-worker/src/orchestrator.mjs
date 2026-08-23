@@ -10,7 +10,6 @@ import { choicesKeyboard } from "./telegram.mjs";
 
 const RETRY_WORKSPACE_TTL_MS = 60 * 60 * 1000;
 const ACTIVE_STATUSES = ["queued", "resume_pending", "processing", "delivering", "waiting_auth", "waiting_choice"];
-const CANCELLABLE_STATUSES = ["queued", "resume_pending", "processing", "waiting_auth", "waiting_choice"];
 
 export class Orchestrator {
   constructor({
@@ -120,7 +119,7 @@ export class Orchestrator {
           console.error("Cannot replace Telegram cancellation keyboard with confirmation", error);
         }
       }
-      return this.sendProgress(job.id, `🛑 Скачивание ${jobTitle(job)} отменено. Уже переданные в Amazon файлы нельзя отозвать автоматически.`);
+      return this.sendProgress(job.id, cancellationMessage(job));
     }
     const match = data.match(/^choose:([\w-]+):(\d+)$/);
     if (!match) return this.telegram.answerCallbackQuery(callback.id, "❌ Неизвестное действие");
@@ -484,7 +483,7 @@ export class Orchestrator {
   }
 
   async cancel(chatId) {
-    const jobs = this.store.listJobs(chatId, CANCELLABLE_STATUSES);
+    const jobs = this.store.listJobs(chatId, ACTIVE_STATUSES);
     if (jobs.length > 1) {
       await this.telegram.sendMessage(chatId, "Какое задание отменить?", {
         reply_markup: cancelKeyboard(jobs)
@@ -494,7 +493,7 @@ export class Orchestrator {
     const job = jobs[0] && this.store.cancelJob(chatId, jobs[0].id);
     if (job) {
       this.completeAnalytics(job, "cancelled", "Отменено пользователем");
-      await this.sendProgress(job.id, `🛑 Скачивание ${jobTitle(job)} отменено. Уже переданные в Amazon файлы нельзя отозвать автоматически.`);
+      await this.sendProgress(job.id, cancellationMessage(job));
     } else {
       await this.telegram.sendMessage(chatId, "ℹ️ Нет активного задания для отмены.");
     }
@@ -580,6 +579,7 @@ export class Orchestrator {
   async updateProgressMessage(jobId, text) {
     const job = this.store.getJob(jobId);
     if (!job) return;
+    if (job.status === "cancelled") text = cancellationMessage(job);
     try {
       if (job.statusMessageId && typeof this.telegram.editMessage === "function") {
         try {
@@ -696,6 +696,7 @@ function errorMessage(error) {
 function isWebControlJob(job) { return String(job.chatId || "").startsWith("web:"); }
 function formatMegabytes(bytes) { return `${(Number(bytes) / 1_000_000).toFixed(1)} МБ`; }
 function jobTitle(job) { return job.seriesTitle || job.titleQuery; }
+function cancellationMessage(job) { return `🛑 Скачивание ${jobTitle(job)} отменено. Уже переданные в Amazon файлы нельзя отозвать автоматически.`; }
 function cancelKeyboard(jobs) {
   return {
     inline_keyboard: jobs.map((job) => [{

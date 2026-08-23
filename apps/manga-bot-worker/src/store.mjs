@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 
+const CANCELLABLE_STATUSES = ["queued", "resume_pending", "waiting_choice", "waiting_auth", "processing", "delivering"];
+
 export function createStore(dataDir) {
   fs.mkdirSync(dataDir, { recursive: true });
   const db = new Database(path.join(dataDir, "manga-bot.sqlite"));
@@ -124,19 +126,20 @@ class Store {
     if (fields.length === 0) return this.getJob(id);
     fields.push("updated_at = ?");
     values.push(now(), id);
-    this.db.prepare(`UPDATE jobs SET ${fields.join(", ")} WHERE id = ?`).run(...values);
+    const preserveCancellation = Object.keys(patch).some((key) => key !== "statusMessageId");
+    this.db.prepare(`UPDATE jobs SET ${fields.join(", ")} WHERE id = ?${preserveCancellation ? " AND status != 'cancelled'" : ""}`).run(...values);
     return this.getJob(id);
   }
 
   cancelLatest(chatId) {
-    const job = this.latestJob(chatId, ["queued", "resume_pending", "waiting_choice", "waiting_auth", "processing"]);
+    const job = this.latestJob(chatId, CANCELLABLE_STATUSES);
     if (!job) return null;
     return this.cancelJob(chatId, job.id);
   }
 
   cancelJob(chatId, id) {
     const job = this.getJob(id);
-    if (!job || job.chatId !== String(chatId) || !["queued", "resume_pending", "waiting_choice", "waiting_auth", "processing"].includes(job.status)) return null;
+    if (!job || job.chatId !== String(chatId) || !CANCELLABLE_STATUSES.includes(job.status)) return null;
     return this.updateJob(job.id, { status: "cancelled", progress: "Отменено пользователем" });
   }
 

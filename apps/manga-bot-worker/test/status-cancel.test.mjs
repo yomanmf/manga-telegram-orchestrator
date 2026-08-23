@@ -47,3 +47,32 @@ test("shows every active job and asks which one to cancel", async () => {
   assert.deepEqual(answers, [{ id: "cancel-1", text: "🛑 Отменено" }]);
   assert.deepEqual(edited[0].options, { reply_markup: { inline_keyboard: [] } });
 });
+
+test("keeps a delivering job cancelled and its confirmation visible", async () => {
+  const directory = `/tmp/manga-delivery-cancel-test-${Date.now()}-${Math.random()}`;
+  const store = createStore(directory);
+  const job = store.createJob({ chatId: "8", status: "delivering", titleQuery: "Third Manga", progress: "Amazon обрабатывает файлы" });
+  const sent = [];
+  const edited = [];
+  const orchestrator = new Orchestrator({
+    store,
+    telegram: {
+      async sendMessage(chatId, text) {
+        sent.push({ chatId, text });
+        return { message_id: 1 };
+      },
+      async editMessage(chatId, messageId, text) { edited.push({ chatId, messageId, text }); }
+    },
+    mangaApp: {},
+    kindle: {},
+    maxPdfBytes: 1
+  });
+
+  await orchestrator.cancel("8");
+  store.updateJob(job.id, { status: "delivering", progress: "Устаревший прогресс" });
+  await orchestrator.sendProgress(job.id, "⬇️ Устаревший прогресс");
+
+  assert.equal(store.getJob(job.id).status, "cancelled");
+  assert.match(sent[0].text, /Скачивание Third Manga отменено/);
+  assert.match(edited[0].text, /Скачивание Third Manga отменено/);
+});
