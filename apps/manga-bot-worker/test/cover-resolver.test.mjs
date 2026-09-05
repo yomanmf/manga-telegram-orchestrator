@@ -34,6 +34,42 @@ function pngWithDimensions(width, height, suffix = "") {
   return image;
 }
 
+test("maps Jujutsu Kaisen's numbered chapter columns without counting nested template fields", () => {
+  const wikitext = `
+{{Graphic novel list
+| VolumeNumber = 1
+| ChapterListCol1 =
+{{Numbered list|start=1
+|{{Nihongo|Chapter title|Japanese|Transliteration}}
+|{{Nihongo
+|Another title
+|Japanese
+}}
+}}
+| ChapterListCol2 =
+{{Numbered list|start=3
+|Third chapter
+}}
+| Summary =
+*100. This is not a chapter
+}}
+{{Graphic novel list
+| VolumeNumber = 2
+| ChapterListCol1 =
+{{Numbered list|start=8
+|Eighth chapter
+|Ninth chapter
+}}
+| ChapterListCol2 =
+{{Numbered list|start=10
+|Tenth chapter
+}}
+}}`;
+  for (const [chapter, volume] of [[1, "1"], [2, "1"], [3, "1"], [8, "2"], [9, "2"], [10, "2"], [4, null], [7, null], [11, null], [8.5, null], [100, null]]) {
+    assert.equal(volumeFromWikipediaWikitext(wikitext, "Jujutsu Kaisen", chapter), volume, `chapter ${chapter}`);
+  }
+});
+
 test("selects the exact manga and maps its first chapter to a volume", () => {
   assert.equal(englishSearchTitle("One Piece (Color)"), "One Piece");
   const exact = { id: "one-piece", attributes: { title: { "ja-ro": "One Piece" }, altTitles: [] } };

@@ -386,14 +386,33 @@ export function volumeFromWikipediaWikitext(wikitext, title, chapterNumber) {
   const section = wikipediaSeriesSection(wikitext, title);
   let volume = null;
   let inChapterList = false;
+  let numberedChapter = null;
+  let listDepth = 0;
   for (const line of section.split(/\r?\n/)) {
     const volumeMatch = line.match(/^\s*\|\s*VolumeNumber\s*=\s*[^\d\n]*(\d+(?:[.,]\d+)?)/i);
     if (volumeMatch) {
       volume = String(volumeMatch[1]).replace(",", ".");
       inChapterList = false;
+      listDepth = 0;
       continue;
     }
-    if (/^\s*\|\s*ChapterList\s*=/i.test(line)) inChapterList = true;
+    if (listDepth > 0) {
+      if (listDepth === 1 && /^\s*\|\s*\S/.test(line) && !/^\s*\|\s*\w+\s*=/.test(line)) {
+        if (numberedChapter === target) return volume;
+        numberedChapter += 1;
+      }
+      listDepth += (line.match(/\{\{/g) || []).length - (line.match(/\}\}/g) || []).length;
+      continue;
+    }
+    if (/^\s*\|\s*\w+\s*=/.test(line)) {
+      inChapterList = /^\s*\|\s*ChapterList(?:Col\d+)?\s*=/i.test(line);
+    }
+    const numberedList = line.match(/^\s*\{\{Numbered list\s*\|\s*start\s*=\s*(\d+)\s*$/i);
+    if (volume && inChapterList && numberedList) {
+      numberedChapter = Number(numberedList[1]);
+      listDepth = 1;
+      continue;
+    }
     if (!volume || (!inChapterList && !/^\s*\|\s*ChapterNumber\s*=/i.test(line))) continue;
     const number = chapterNumberFromWikiLine(line);
     if (number !== null && Math.abs(number - target) < 0.000001) return volume;
