@@ -1,3 +1,5 @@
+import { telegramFetch } from "./telegram-fetch.mjs";
+
 const API = "https://api.telegram.org";
 
 export const MENU_COMMANDS = [
@@ -9,7 +11,7 @@ export const MENU_COMMANDS = [
   { command: "merge", description: "Configure vertical page merging" }
 ];
 
-export function createTelegram(token, { retryDelays = [250, 1_000], timeoutMs = 5_000 } = {}) {
+export function createTelegram(token, { retryDelays = [250, 1_000], timeoutMs = 5_000, request = telegramFetch } = {}) {
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN is required");
   const baseUrl = `${API}/bot${token}`;
 
@@ -17,7 +19,7 @@ export function createTelegram(token, { retryDelays = [250, 1_000], timeoutMs = 
     let lastError;
     for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
       try {
-        const response = await fetch(`${baseUrl}/${method}`, {
+        const response = await request(`${baseUrl}/${method}`, {
           method: "POST",
           signal: AbortSignal.timeout(timeoutMs + (method === "getUpdates" ? Number(body.timeout || 0) * 1_000 : 0)),
           headers: { "Content-Type": "application/json" },
@@ -104,7 +106,7 @@ function isRetryableStatus(status) {
 }
 
 function isTransportError(error) {
-  return error instanceof TypeError || error?.name === "TimeoutError" || Boolean(error?.cause?.code);
+  return error instanceof TypeError || error?.name === "TimeoutError" || error?.name === "AbortError" || Boolean(error?.code || error?.cause?.code);
 }
 
 function sleep(milliseconds) {

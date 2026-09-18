@@ -14,7 +14,7 @@ test("registers the command menu with Telegram", async () => {
   };
 
   try {
-    await createTelegram("test-token").configureMenu();
+    await createTelegram("test-token", { request: globalThis.fetch }).configureMenu();
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -47,7 +47,7 @@ test("retries a transient Telegram fetch failure", async () => {
   };
 
   try {
-    const result = await createTelegram("test-token", { retryDelays: [0] })
+    const result = await createTelegram("test-token", { retryDelays: [0], request: globalThis.fetch })
       .sendMessage("7", "progress");
     assert.deepEqual(result, { message_id: 1 });
     assert.equal(attempts, 2);
@@ -70,7 +70,7 @@ test("switches from webhook delivery to long polling without dropping updates", 
   };
 
   try {
-    const telegram = createTelegram("test-token");
+    const telegram = createTelegram("test-token", { request: globalThis.fetch });
     await telegram.deleteWebhook();
     const updates = await telegram.getUpdates(40, 25);
     assert.equal(updates[0].update_id, 42);
