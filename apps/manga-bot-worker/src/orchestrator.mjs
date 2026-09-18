@@ -156,19 +156,28 @@ export class Orchestrator {
   }
 
   async tick() {
+    await this.reconcileDeliveries();
     if (this.running) return;
     this.running = true;
     try {
       const job = this.store.nextActiveJob();
       await this.pruneWorkspaces(job?.id);
       if (!job) return;
-      if (job.status === "delivering" || job.status === "waiting_auth") {
-        await this.reconcileDelivery(job);
-      } else {
+      if (job.status !== "delivering" && job.status !== "waiting_auth") {
         await this.runJob(job);
       }
     } finally {
       this.running = false;
+    }
+  }
+
+  async reconcileDeliveries() {
+    if (this.reconciling) return;
+    this.reconciling = true;
+    try {
+      await Promise.all(this.store.listDeliveringJobs().map((job) => this.reconcileDelivery(job)));
+    } finally {
+      this.reconciling = false;
     }
   }
 
@@ -424,7 +433,7 @@ export class Orchestrator {
     try {
       const entries = await Promise.all(job.kindleJobs.map(async (submitted) => {
         const current = await this.kindle.job(submitted.id);
-        return { ...submitted, status: current.job.status, error: current.job.error || null };
+        return { ...submitted, size: current.job.size ?? submitted.size, status: current.job.status, error: current.job.error || null };
       }));
       if (entries.some((entry) => entry.status === "failed")) {
         const failed = entries.find((entry) => entry.status === "failed");
@@ -446,13 +455,19 @@ export class Orchestrator {
         if (!wasWaiting) await this.sendKindleConnectUrl(job.chatId, job);
         return;
       }
-      const progress = "Amazon обрабатывает файлы";
+      const retryError = entries.find((entry) => entry.error)?.error;
+      const progress = entries.some((entry) => entry.status === "verifying")
+        ? "Amazon обрабатывает файлы"
+        : entries.some((entry) => entry.status === "processing")
+          ? "Загружаю файлы в Amazon"
+          : `Ожидаю отправки в очереди Kindle${retryError ? `; повтор после ошибки: ${retryError}` : ""}`;
       this.store.updateJob(job.id, { status: "delivering", kindleJobs: entries, progress });
       if (job.progress !== progress) {
         await this.sendProgress(job.id, downloadProgress(job, progress));
       }
     } catch (error) {
       console.error("Delivery reconciliation failed", error);
+      this.store.updateJob(job.id, { progress: "Загрузчик Kindle недоступен; повторю проверку автоматически" });
     }
   }
 
@@ -469,16 +484,8 @@ export class Orchestrator {
 
   async describeKindleFiles(entries) {
     if (!entries?.length) return "";
-    const details = await Promise.all(entries.map(async (entry) => {
-      try {
-        const response = await this.kindle.job(entry.id);
-        const current = response.job;
-        const size = Number.isFinite(Number(current.size)) ? formatMegabytes(current.size) : "размер неизвестен";
-        return `• ${current.filename || entry.filename} — ${size}, ${current.status}`;
-      } catch {
-        return `• ${entry.filename} — ${entry.size ? formatMegabytes(entry.size) : "размер неизвестен"}, ${entry.status}`;
-      }
-    }));
+    const details = entries.map((entry) =>
+      `• ${entry.filename} — ${entry.size ? formatMegabytes(entry.size) : "размер неизвестен"}, ${entry.status}${entry.error ? `; ${entry.error}` : ""}`);
     return `Файлы в Kindle:\n${details.join("\n")}`;
   }
 

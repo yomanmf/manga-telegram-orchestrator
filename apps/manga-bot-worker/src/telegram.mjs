@@ -9,7 +9,7 @@ export const MENU_COMMANDS = [
   { command: "merge", description: "Configure vertical page merging" }
 ];
 
-export function createTelegram(token, { retryDelays = [250, 1_000] } = {}) {
+export function createTelegram(token, { retryDelays = [250, 1_000], timeoutMs = 5_000 } = {}) {
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN is required");
   const baseUrl = `${API}/bot${token}`;
 
@@ -19,6 +19,7 @@ export function createTelegram(token, { retryDelays = [250, 1_000] } = {}) {
       try {
         const response = await fetch(`${baseUrl}/${method}`, {
           method: "POST",
+          signal: AbortSignal.timeout(timeoutMs + (method === "getUpdates" ? Number(body.timeout || 0) * 1_000 : 0)),
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body)
         });
@@ -103,7 +104,7 @@ function isRetryableStatus(status) {
 }
 
 function isTransportError(error) {
-  return error instanceof TypeError || Boolean(error?.cause?.code);
+  return error instanceof TypeError || error?.name === "TimeoutError" || Boolean(error?.cause?.code);
 }
 
 function sleep(milliseconds) {

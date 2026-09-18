@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-export function createKindleClient({ baseUrl, sharedSecret }) {
+export function createKindleClient({ baseUrl, sharedSecret, timeoutMs = 5_000 }) {
   if (!baseUrl || !sharedSecret) {
     throw new Error("KINDLE_WORKER_URL and KINDLE_SHARED_SECRET are required");
   }
@@ -10,6 +10,7 @@ export function createKindleClient({ baseUrl, sharedSecret }) {
   async function api(pathname, options = {}) {
     const response = await fetch(`${url}${pathname}`, {
       ...options,
+      signal: options.signal || AbortSignal.timeout(timeoutMs),
       headers: { ...headers, ...(options.headers || {}) }
     });
     const data = await response.json().catch(() => ({}));

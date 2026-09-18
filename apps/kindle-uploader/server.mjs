@@ -39,6 +39,7 @@ import {
 } from "./kindle-metadata.mjs";
 import { canRecycleIdleUploader } from "./idle-recycle.mjs";
 import { publicRequestBaseUrl } from "./public-url.mjs";
+import { withDeadline } from "./deadline.mjs";
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || "/data";
@@ -1133,6 +1134,26 @@ async function ensureSendToKindlePage() {
 }
 
 async function checkKindleSession() {
+  try {
+    return await withDeadline(inspectKindleSession, 30_000, "Amazon session check");
+  } catch (error) {
+    lastWorkerError = errorMessage(error);
+    // Closing the context cancels stuck title/evaluate calls before the next attempt.
+    try {
+      await withDeadline(async () => {
+        if (browserStarting) await browserStarting;
+        await browserContext?.close();
+      }, 5_000, "Chromium recovery");
+    } catch {
+      // The persisted queue is resumed by the container restart policy.
+      console.error("Chromium is unresponsive; restarting uploader");
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
+async function inspectKindleSession() {
   const page = await ensureSendToKindlePage();
   const url = page.url();
   const title = await page.title().catch(() => "");
@@ -1192,25 +1213,25 @@ async function runQueue() {
         return;
       }
 
-      if (!await checkKindleSession()) {
-        await markJobWaitingForAuth(job);
-        return;
-      }
-
+      const affectedJobs = job.batchId
+        ? queue.filter((item) => item.batchId === job.batchId &&
+          ["queued", "processing", "verifying", "waiting_auth"].includes(item.status))
+        : [job];
+      const attemptsBefore = new Map(affectedJobs.map((item) => [item.id, item.attempts]));
       try {
+        if (!await checkKindleSession()) {
+          for (const item of affectedJobs) await markJobWaitingForAuth(item);
+          return;
+        }
         if (job.batchId) {
           await processQueueBatch(job.batchId);
         } else {
           await processQueueJob(job);
         }
       } catch (error) {
-        const affectedJobs = job.batchId
-          ? queue.filter((item) =>
-            item.batchId === job.batchId &&
-            ["queued", "processing", "verifying"].includes(item.status)
-          )
-          : [job];
         for (const affectedJob of affectedJobs) {
+          if (affectedJob.status === "sent") continue;
+          if (affectedJob.attempts === attemptsBefore.get(affectedJob.id)) affectedJob.attempts += 1;
           await recordQueueJobFailure(affectedJob, error);
         }
 
@@ -1321,7 +1342,7 @@ async function processQueueBatch(batchId) {
     .filter((item) =>
       item.batchId === batchId &&
       item.batchStartedAt &&
-      ["queued", "processing", "verifying"].includes(item.status)
+      ["queued", "processing", "verifying", "waiting_auth"].includes(item.status)
     )
     .sort((left, right) =>
       String(left.createdAt).localeCompare(String(right.createdAt))

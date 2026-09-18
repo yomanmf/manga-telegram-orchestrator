@@ -4,6 +4,33 @@ import assert from "node:assert/strict";
 import { Orchestrator } from "../src/orchestrator.mjs";
 import { createStore } from "../src/store.mjs";
 
+test("reconciles all deliveries during processing and serves status without waiting on Kindle", async () => {
+  const store = createStore(`/tmp/manga-delivery-status-${Date.now()}`);
+  const first = store.createJob({ chatId: "7", status: "delivering", titleQuery: "First", kindleJobs: [{ id: "one", filename: "one.epub", status: "queued" }] });
+  const second = store.createJob({ chatId: "7", status: "delivering", titleQuery: "Second", kindleJobs: [{ id: "two", filename: "two.epub", status: "queued" }] });
+  const sent = [];
+  let calls = 0;
+  const orchestrator = new Orchestrator({
+    store, tempRoot: `/tmp/manga-delivery-status-work-${Date.now()}`,
+    telegram: { async sendMessage(_chat, text) { sent.push(text); } },
+    kindle: { async job(id) {
+      calls += 1;
+      return { job: { status: id === "one" ? "queued" : "sent", size: 1234567, error: id === "one" ? "Amazon session check timed out" : "" } };
+    } },
+    mangaApp: {}, maxPdfBytes: 1
+  });
+  orchestrator.running = true;
+  await orchestrator.tick();
+  assert.equal(calls, 2);
+  assert.equal(store.getJob(second.id).status, "completed");
+  assert.match(store.getJob(first.id).progress, /Ожидаю отправки.*Amazon session check timed out/);
+  orchestrator.kindle.job = () => { throw new Error("Status must use the reconciled snapshot"); };
+  await orchestrator.sendStatus("7");
+  assert.match(sent.at(-1), /1.2 МБ, queued/);
+  assert.doesNotMatch(sent.at(-1), /Amazon обрабатывает файлы/);
+  store.db.close();
+});
+
 test("shows every active job and asks which one to cancel", async () => {
   const directory = `/tmp/manga-status-cancel-test-${Date.now()}-${Math.random()}`;
   const store = createStore(directory);

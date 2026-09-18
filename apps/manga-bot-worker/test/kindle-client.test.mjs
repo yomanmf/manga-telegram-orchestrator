@@ -3,8 +3,21 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import http from "node:http";
 
 import { createKindleClient } from "../src/kindle-client.mjs";
+
+test("aborts an unresponsive uploader instead of blocking reconciliation", async () => {
+  const server = http.createServer(() => {});
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const client = createKindleClient({ baseUrl: `http://127.0.0.1:${server.address().port}`, sharedSecret: "test", timeoutMs: 30 });
+    await assert.rejects(client.job("stuck"), { name: "TimeoutError" });
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
 
 test("uploads tickets through the internal worker origin", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "kindle-client-"));

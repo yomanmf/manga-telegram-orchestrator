@@ -101,6 +101,11 @@ class Store {
     return row ? hydrateJob(row) : null;
   }
 
+  listDeliveringJobs() {
+    return this.db.prepare("SELECT * FROM jobs WHERE status IN ('delivering', 'waiting_auth') ORDER BY created_at ASC")
+      .all().map(hydrateJob);
+  }
+
   listWaitingAuth() {
     return this.db.prepare("SELECT * FROM jobs WHERE status = 'waiting_auth' ORDER BY updated_at ASC")
       .all().map(hydrateJob);
