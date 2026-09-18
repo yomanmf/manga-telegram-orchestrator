@@ -3,6 +3,22 @@ import assert from "node:assert/strict";
 
 import { createTelegram, MENU_COMMANDS } from "../src/telegram.mjs";
 
+test("uses the private SOCKS tunnel with remote DNS and keeps long polling timeout", async () => {
+  const telegram = createTelegram("test-token", {
+    proxyUrl: "socks5h://proxy.test:1080",
+    async request(_url, options) {
+      assert.equal(options.agent.proxy.host, "proxy.test");
+      assert.equal(options.agent.shouldLookup, false);
+      assert.equal(options.agent.keepAlive, true);
+      assert.equal(options.agent.timeout, null);
+      assert.equal(JSON.parse(options.body).timeout, 25);
+      assert.equal(options.signal.aborted, false);
+      return Response.json({ ok: true, result: [] });
+    }
+  });
+  assert.deepEqual(await telegram.getUpdates(0, 25), []);
+});
+
 test("registers the command menu with Telegram", async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];

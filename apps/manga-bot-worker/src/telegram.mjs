@@ -1,4 +1,5 @@
 import { telegramFetch } from "./telegram-fetch.mjs";
+import { SocksProxyAgent } from "socks-proxy-agent";
 
 const API = "https://api.telegram.org";
 
@@ -11,9 +12,10 @@ export const MENU_COMMANDS = [
   { command: "merge", description: "Configure vertical page merging" }
 ];
 
-export function createTelegram(token, { retryDelays = [250, 1_000], timeoutMs = 5_000, request = telegramFetch } = {}) {
+export function createTelegram(token, { retryDelays = [250, 1_000], timeoutMs = 5_000, request = telegramFetch, proxyUrl = "" } = {}) {
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN is required");
   const baseUrl = `${API}/bot${token}`;
+  const agent = proxyUrl ? new SocksProxyAgent(proxyUrl, { keepAlive: true }) : undefined;
 
   async function call(method, body) {
     let lastError;
@@ -21,6 +23,7 @@ export function createTelegram(token, { retryDelays = [250, 1_000], timeoutMs = 
       try {
         const response = await request(`${baseUrl}/${method}`, {
           method: "POST",
+          agent,
           signal: AbortSignal.timeout(timeoutMs + (method === "getUpdates" ? Number(body.timeout || 0) * 1_000 : 0)),
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body)

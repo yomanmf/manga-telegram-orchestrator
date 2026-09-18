@@ -21,7 +21,7 @@ const config = readConfig(process.env);
 const missingConfiguration = requiredNames(config);
 const ready = missingConfiguration.length === 0;
 const store = ready ? createStore(config.dataDir) : null;
-const telegram = ready ? createTelegram(config.telegramToken) : null;
+const telegram = ready ? createTelegram(config.telegramToken, { proxyUrl: config.telegramProxyUrl }) : null;
 const mangaApp = ready ? createMangaAppClient({ baseUrl: config.mangaAppUrl, sessionToken: config.mangaAppSessionToken }) : null;
 const kindle = ready ? createKindleClient({ baseUrl: config.kindleWorkerUrl, sharedSecret: config.kindleSharedSecret }) : null;
 const orchestrator = ready ? new Orchestrator({
@@ -139,6 +139,7 @@ function readConfig(env) {
     port: Number(env.PORT || 3000),
     dataDir: env.DATA_DIR || "/data",
     telegramToken: optional(env, "TELEGRAM_BOT_TOKEN"),
+    telegramProxyUrl: optional(env, "TELEGRAM_PROXY_URL"),
     telegramUpdateMode: String(env.TELEGRAM_UPDATE_MODE || "polling").trim().toLowerCase(),
     webhookSecret: optional(env, "TELEGRAM_WEBHOOK_SECRET"),
     ownerUserId: optional(env, "TELEGRAM_OWNER_USER_ID") || optional(env, "TELEGRAM_ALLOWED_CHAT_ID"),

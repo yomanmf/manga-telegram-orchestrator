@@ -8,6 +8,7 @@ export async function telegramFetch(url, options, { request = https.request, con
       const req = request(url, {
         method: options.method,
         headers: options.headers,
+        agent: options.agent,
         signal: options.signal,
         family: 4
       }, (response) => {

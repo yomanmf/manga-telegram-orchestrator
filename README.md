@@ -148,6 +148,13 @@ address when the address returned by cloud DNS is unreachable from the VM. The
 override is applied only to `manga-bot-worker`; the bot token still goes directly
 to Telegram and never passes through a third-party proxy.
 
+When direct Telegram connections are unstable, `TELEGRAM_PROXY_URL` can select
+an existing private SOCKS tunnel, for example `socks5h://media-xray:1080`.
+The bot must share the proxy's Docker network; configure that network and the
+environment variable in the production Compose files before the normal CI
+rollout. TLS remains verified end-to-end with `api.telegram.org`. Connection
+setup has a separate 1.5-second deadline, without shortening long polling.
+
 The bot fills each EPUB with up to 185 MiB of rendered page assets, splitting a
 chapter when needed. Only the final EPUB may be materially smaller; covers and
 package metadata remain below the uploader's 200 MB hard limit.
