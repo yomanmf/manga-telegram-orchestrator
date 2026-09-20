@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 const CONTROL_CHAT_ID = "web:rekindle";
 const ACTIVE_STATUSES = ["queued", "resume_pending", "processing", "delivering", "waiting_auth", "waiting_choice"];
 
-export function registerControlRoutes(app, { store, mangaApp, kindle, token }) {
+export function registerControlRoutes(app, { store, mangaApp, kindle, qbittorrent, token }) {
   app.post("/control/:action", async (req, res) => {
     if (!authorized(req.get("Authorization"), token)) {
       res.status(401).json({ error: "Unauthorized" });
@@ -19,11 +19,20 @@ export function registerControlRoutes(app, { store, mangaApp, kindle, token }) {
       if (action === "status") return res.json(status(store, body));
       if (action === "cancel") return res.json(cancel(store));
       if (action === "retry") return res.json(retry(store));
+      if (action === "torrents") return res.json({ torrents: await qbittorrent.list() });
+      if (action === "torrent-delete") return res.json(await deleteTorrent(qbittorrent, body));
       res.status(404).json({ error: "Control action not found" });
     } catch (error) {
       res.status(error.status || 400).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
+}
+
+async function deleteTorrent(qbittorrent, body) {
+  const hash = String(body.hash || "").trim().toLowerCase();
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(hash)) throw routeError(400, "Invalid torrent hash");
+  await qbittorrent.delete(hash);
+  return { ok: true, hash };
 }
 
 async function search(mangaApp, body) {

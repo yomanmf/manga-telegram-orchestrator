@@ -27,6 +27,10 @@ function setup(overrides = {}) {
       async loadSeries(url) { return { title: "The Fable", chapters: [{ id: "chapter", title: "Chapter 1", index: 1 }], url }; }
     },
     kindle: {},
+    qbittorrent: {
+      async list() { return []; },
+      async delete() {}
+    },
     ...overrides
   });
   return { handler, jobs };
@@ -74,6 +78,21 @@ test("does not expose Amazon authentication through web control", async () => {
   const { handler } = setup();
   assert.equal((await call(handler, "kindle-status")).status, 404);
   assert.equal((await call(handler, "kindle-connect")).status, 404);
+});
+
+test("lists torrents and deletes their downloaded files through qBittorrent", async () => {
+  const deleted = [];
+  const { handler } = setup({
+    qbittorrent: {
+      async list() { return [{ hash: "a".repeat(40), name: "Example" }]; },
+      async delete(hash) { deleted.push(hash); }
+    }
+  });
+  assert.equal((await call(handler, "torrents")).body.torrents[0].name, "Example");
+  const response = await call(handler, "torrent-delete", { hash: "A".repeat(40) });
+  assert.deepEqual(response.body, { ok: true, hash: "a".repeat(40) });
+  assert.deepEqual(deleted, ["a".repeat(40)]);
+  assert.equal((await call(handler, "torrent-delete", { hash: "../downloads" })).status, 400);
 });
 
 test("web jobs reuse the server Kindle uploader without Telegram or email delivery", () => {

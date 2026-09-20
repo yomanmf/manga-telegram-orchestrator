@@ -8,6 +8,7 @@ import { createKindleClient } from "./kindle-client.mjs";
 import { createMangaAppClient } from "./manga-app.mjs";
 import { Orchestrator } from "./orchestrator.mjs";
 import { registerControlRoutes } from "./control.mjs";
+import { createQbittorrentClient } from "./qbittorrent.mjs";
 import { createStore } from "./store.mjs";
 import { createTelegram } from "./telegram.mjs";
 import { isOwnerPrivateUpdate } from "./telegram-auth.mjs";
@@ -24,6 +25,7 @@ const store = ready ? createStore(config.dataDir) : null;
 const telegram = ready ? createTelegram(config.telegramToken, { proxyUrl: config.telegramProxyUrl }) : null;
 const mangaApp = ready ? createMangaAppClient({ baseUrl: config.mangaAppUrl, sessionToken: config.mangaAppSessionToken }) : null;
 const kindle = ready ? createKindleClient({ baseUrl: config.kindleWorkerUrl, sharedSecret: config.kindleSharedSecret }) : null;
+const qbittorrent = ready ? createQbittorrentClient({ baseUrl: config.qbittorrentUrl }) : null;
 const orchestrator = ready ? new Orchestrator({
   store,
   telegram,
@@ -51,6 +53,7 @@ if (store) {
     store,
     mangaApp,
     kindle,
+    qbittorrent,
     token: config.controlToken
   });
 }
@@ -153,6 +156,7 @@ function readConfig(env) {
     analyticsDashboardUsername: optional(env, "ANALYTICS_DASHBOARD_USERNAME"),
     analyticsDashboardPassword: optional(env, "ANALYTICS_DASHBOARD_PASSWORD"),
     controlToken: optional(env, "MANGA_CONTROL_TOKEN") || optional(env, "ANALYTICS_INGEST_TOKEN"),
+    qbittorrentUrl: String(env.QBITTORRENT_URL || "http://media-qbittorrent:8080").replace(/\/+$/, ""),
     maxPdfBytes: Number(env.MAX_PDF_BYTES || DEFAULT_MAX_PDF_BYTES),
     chapterProcessingConcurrency: boundedInteger(
       env.CHAPTER_PROCESSING_CONCURRENCY,

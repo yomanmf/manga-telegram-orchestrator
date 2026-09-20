@@ -190,9 +190,16 @@ matches the web interface's PDF collector behavior, including right-to-left
 spreads and an empty left half for an unpaired vertical page.
 
 The ReKindle browser uses the authenticated `/control/{action}` service-to-service
-route (`search`, `series`, `create`, `status`, `cancel`, and `retry`). It creates
+route (`search`, `series`, `create`, `status`, `cancel`, `retry`, `torrents`, and
+`torrent-delete`). It creates
 `web:rekindle` jobs directly and sends them through the same server-side Amazon
 Send to Kindle uploader as Telegram jobs, without synthesizing bot updates or
 calling the Telegram API. The Kindle browser never opens Amazon authentication;
 the uploader uses its saved server session. Set `MANGA_CONTROL_TOKEN`, or the
 existing analytics ingest token is reused.
+
+Torrent control reaches qBittorrent only through its private Docker hostname
+(`QBITTORRENT_URL`, default `http://media-qbittorrent:8080`). The browser receives
+no filesystem paths or qBittorrent credentials. `torrent-delete` accepts only a
+40- or 64-character hexadecimal info hash and always sends `deleteFiles=true`,
+so the torrent and its downloaded payload are removed together.
