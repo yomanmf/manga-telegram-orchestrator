@@ -31,6 +31,10 @@ function setup(overrides = {}) {
       async list() { return []; },
       async delete() {}
     },
+    seerr: {
+      async listCompleted() { return []; },
+      async deleteCompleted() { return { ok: true }; }
+    },
     ...overrides
   });
   return { handler, jobs };
@@ -93,6 +97,20 @@ test("lists torrents and deletes their downloaded files through qBittorrent", as
   assert.deepEqual(response.body, { ok: true, hash: "a".repeat(40) });
   assert.deepEqual(deleted, ["a".repeat(40)]);
   assert.equal((await call(handler, "torrent-delete", { hash: "../downloads" })).status, 400);
+});
+
+test("lists completed Seerr media and deletes its library files", async () => {
+  const deleted = [];
+  const { handler } = setup({
+    seerr: {
+      async listCompleted() { return [{ source: "seerr", requestId: 7, mediaId: 8, name: "Example Movie" }]; },
+      async deleteCompleted(requestId, mediaId) { deleted.push([requestId, mediaId]); return { ok: true, requestId, mediaId }; }
+    }
+  });
+  assert.equal((await call(handler, "torrents")).body.torrents[0].name, "Example Movie");
+  assert.deepEqual((await call(handler, "media-delete", { requestId: 7, mediaId: 8 })).body,
+    { ok: true, requestId: 7, mediaId: 8 });
+  assert.deepEqual(deleted, [[7, 8]]);
 });
 
 test("web jobs reuse the server Kindle uploader without Telegram or email delivery", () => {

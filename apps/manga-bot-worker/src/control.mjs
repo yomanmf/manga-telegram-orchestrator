@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 const CONTROL_CHAT_ID = "web:rekindle";
 const ACTIVE_STATUSES = ["queued", "resume_pending", "processing", "delivering", "waiting_auth", "waiting_choice"];
 
-export function registerControlRoutes(app, { store, mangaApp, kindle, qbittorrent, token }) {
+export function registerControlRoutes(app, { store, mangaApp, kindle, qbittorrent, seerr, token }) {
   app.post("/control/:action", async (req, res) => {
     if (!authorized(req.get("Authorization"), token)) {
       res.status(401).json({ error: "Unauthorized" });
@@ -19,13 +19,21 @@ export function registerControlRoutes(app, { store, mangaApp, kindle, qbittorren
       if (action === "status") return res.json(status(store, body));
       if (action === "cancel") return res.json(cancel(store));
       if (action === "retry") return res.json(retry(store));
-      if (action === "torrents") return res.json({ torrents: await qbittorrent.list() });
+      if (action === "torrents") return res.json({
+        torrents: (await qbittorrent.list()).concat(seerr ? await seerr.listCompleted() : [])
+      });
       if (action === "torrent-delete") return res.json(await deleteTorrent(qbittorrent, body));
+      if (action === "media-delete") return res.json(await deleteMedia(seerr, body));
       res.status(404).json({ error: "Control action not found" });
     } catch (error) {
       res.status(error.status || 400).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
+}
+
+async function deleteMedia(seerr, body) {
+  if (!seerr) throw routeError(503, "Seerr is not configured");
+  return seerr.deleteCompleted(body.requestId, body.mediaId);
 }
 
 async function deleteTorrent(qbittorrent, body) {

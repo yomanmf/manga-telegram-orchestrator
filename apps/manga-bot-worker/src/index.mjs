@@ -9,6 +9,7 @@ import { createMangaAppClient } from "./manga-app.mjs";
 import { Orchestrator } from "./orchestrator.mjs";
 import { registerControlRoutes } from "./control.mjs";
 import { createQbittorrentClient } from "./qbittorrent.mjs";
+import { createSeerrClient } from "./seerr.mjs";
 import { createStore } from "./store.mjs";
 import { createTelegram } from "./telegram.mjs";
 import { isOwnerPrivateUpdate } from "./telegram-auth.mjs";
@@ -26,6 +27,7 @@ const telegram = ready ? createTelegram(config.telegramToken, { proxyUrl: config
 const mangaApp = ready ? createMangaAppClient({ baseUrl: config.mangaAppUrl, sessionToken: config.mangaAppSessionToken }) : null;
 const kindle = ready ? createKindleClient({ baseUrl: config.kindleWorkerUrl, sharedSecret: config.kindleSharedSecret }) : null;
 const qbittorrent = ready ? createQbittorrentClient({ baseUrl: config.qbittorrentUrl }) : null;
+const seerr = ready && config.seerrApiKey ? createSeerrClient({ baseUrl: config.seerrUrl, apiKey: config.seerrApiKey }) : null;
 const orchestrator = ready ? new Orchestrator({
   store,
   telegram,
@@ -54,6 +56,7 @@ if (store) {
     mangaApp,
     kindle,
     qbittorrent,
+    seerr,
     token: config.controlToken
   });
 }
@@ -157,6 +160,8 @@ function readConfig(env) {
     analyticsDashboardPassword: optional(env, "ANALYTICS_DASHBOARD_PASSWORD"),
     controlToken: optional(env, "MANGA_CONTROL_TOKEN") || optional(env, "ANALYTICS_INGEST_TOKEN"),
     qbittorrentUrl: String(env.QBITTORRENT_URL || "http://media-qbittorrent:8080").replace(/\/+$/, ""),
+    seerrUrl: String(env.SEERR_URL || "http://media-seerr:5055").replace(/\/+$/, ""),
+    seerrApiKey: optional(env, "SEERR_API_KEY"),
     maxPdfBytes: Number(env.MAX_PDF_BYTES || DEFAULT_MAX_PDF_BYTES),
     chapterProcessingConcurrency: boundedInteger(
       env.CHAPTER_PROCESSING_CONCURRENCY,

@@ -190,8 +190,8 @@ matches the web interface's PDF collector behavior, including right-to-left
 spreads and an empty left half for an unpaired vertical page.
 
 The ReKindle browser uses the authenticated `/control/{action}` service-to-service
-route (`search`, `series`, `create`, `status`, `cancel`, `retry`, `torrents`, and
-`torrent-delete`). It creates
+route (`search`, `series`, `create`, `status`, `cancel`, `retry`, `torrents`,
+`torrent-delete`, and `media-delete`). It creates
 `web:rekindle` jobs directly and sends them through the same server-side Amazon
 Send to Kindle uploader as Telegram jobs, without synthesizing bot updates or
 calling the Telegram API. The Kindle browser never opens Amazon authentication;
@@ -203,3 +203,10 @@ Torrent control reaches qBittorrent only through its private Docker hostname
 no filesystem paths or qBittorrent credentials. `torrent-delete` accepts only a
 40- or 64-character hexadecimal info hash and always sends `deleteFiles=true`,
 so the torrent and its downloaded payload are removed together.
+
+Completed media comes from Seerr's private API (`SEERR_URL`, default
+`http://media-seerr:5055`) with the server-only `SEERR_API_KEY`. `media-delete`
+verifies that the request is completed and available, asks Seerr to remove the
+movie or series and its files through Radarr/Sonarr, then removes the request
+record. Seerr credentials and service identifiers are never returned to the
+browser.
