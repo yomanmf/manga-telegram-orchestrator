@@ -7,7 +7,7 @@
 - Test and lint: `npm run verify`
 - Deploy: push the verified commit to `origin/main`; `.github/workflows/ci.yml` builds, publishes, deploys, and waits for the VM terminal event.
 - Health: inspect the latest run with `gh run list --workflow ci.yml --limit 1`; do not treat an image push as a completed deployment.
-- Never install `yc` or other Yandex software; the existing workflow performs deployment through HTTP APIs.
+- Never install `yc`, other Yandex software, or Yandex-provided GitHub Actions. The workflow exchanges GitHub OIDC through ordinary HTTPS, logs into Container Registry with Docker, and deploys through HTTP APIs.
 
 ## Rules
 
