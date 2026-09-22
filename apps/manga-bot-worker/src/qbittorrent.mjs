@@ -36,6 +36,14 @@ export function createQbittorrentClient({ baseUrl = DEFAULT_BASE_URL, fetchImpl 
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body
       });
+    },
+
+    async setPaused(hash, paused) {
+      await request(`/api/v2/torrents/${paused ? "stop" : "start"}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ hashes: hash })
+      });
     }
   };
 }

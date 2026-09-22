@@ -23,6 +23,9 @@ export function registerControlRoutes(app, { store, mangaApp, kindle, qbittorren
         torrents: (await qbittorrent.list()).concat(seerr ? await seerr.listCompleted() : [])
       });
       if (action === "torrent-delete") return res.json(await deleteTorrent(qbittorrent, body));
+      if (action === "torrent-pause" || action === "torrent-resume") {
+        return res.json(await setTorrentPaused(qbittorrent, body, action === "torrent-pause"));
+      }
       if (action === "media-delete") return res.json(await deleteMedia(seerr, body));
       res.status(404).json({ error: "Control action not found" });
     } catch (error) {
@@ -37,10 +40,21 @@ async function deleteMedia(seerr, body) {
 }
 
 async function deleteTorrent(qbittorrent, body) {
-  const hash = String(body.hash || "").trim().toLowerCase();
-  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(hash)) throw routeError(400, "Invalid torrent hash");
+  const hash = torrentHash(body);
   await qbittorrent.delete(hash);
   return { ok: true, hash };
+}
+
+async function setTorrentPaused(qbittorrent, body, paused) {
+  const hash = torrentHash(body);
+  await qbittorrent.setPaused(hash, paused);
+  return { ok: true, hash, paused };
+}
+
+function torrentHash(body) {
+  const hash = String(body.hash || "").trim().toLowerCase();
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(hash)) throw routeError(400, "Invalid torrent hash");
+  return hash;
 }
 
 async function search(mangaApp, body) {

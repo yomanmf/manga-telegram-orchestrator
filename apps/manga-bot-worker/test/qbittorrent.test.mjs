@@ -34,3 +34,20 @@ test("always deletes downloaded files with the torrent", async () => {
   assert.equal(request.options.method, "POST");
   assert.equal(String(request.options.body), `hashes=${"b".repeat(40)}&deleteFiles=true`);
 });
+
+test("stops and starts one torrent with qBittorrent 5 endpoints", async () => {
+  const calls = [];
+  const client = createQbittorrentClient({
+    async fetchImpl(url, options) {
+      calls.push({ url, options });
+      return new Response("");
+    }
+  });
+  await client.setPaused("a".repeat(40), true);
+  await client.setPaused("a".repeat(40), false);
+  assert.deepEqual(calls.map(({ url }) => url.split("/").at(-1)), ["stop", "start"]);
+  for (const { options } of calls) {
+    assert.equal(options.method, "POST");
+    assert.equal(String(options.body), `hashes=${"a".repeat(40)}`);
+  }
+});

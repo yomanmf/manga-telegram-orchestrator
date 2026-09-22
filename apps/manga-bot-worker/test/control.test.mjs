@@ -113,6 +113,23 @@ test("lists completed Seerr media and deletes its library files", async () => {
   assert.deepEqual(deleted, [[7, 8]]);
 });
 
+test("pauses and resumes only valid torrent hashes", async () => {
+  const calls = [];
+  const { handler } = setup({
+    qbittorrent: {
+      async list() { return []; },
+      async delete() {},
+      async setPaused(hash, paused) { calls.push([hash, paused]); }
+    }
+  });
+  const hash = "A".repeat(40);
+  assert.deepEqual((await call(handler, "torrent-pause", { hash })).body, { ok: true, hash: hash.toLowerCase(), paused: true });
+  assert.deepEqual((await call(handler, "torrent-resume", { hash })).body, { ok: true, hash: hash.toLowerCase(), paused: false });
+  assert.equal((await call(handler, "torrent-pause", { hash: "../files" })).status, 400);
+  assert.equal((await call(handler, "torrent-resume", { hash }, "")).status, 401);
+  assert.deepEqual(calls, [[hash.toLowerCase(), true], [hash.toLowerCase(), false]]);
+});
+
 test("web jobs reuse the server Kindle uploader without Telegram or email delivery", () => {
   const source = fs.readFileSync(new URL("../src/orchestrator.mjs", import.meta.url), "utf8");
   assert.match(source, /enqueueVolumes[\s\S]*?kindle\.startBatch/);
