@@ -504,10 +504,14 @@ function wikipediaSearchScore(page, title) {
 
 async function resolveWikipediaVolume({ fetchImpl, title, chapterNumber }) {
   const directPage = `List of ${englishSearchTitle(title)} chapters`;
-  const direct = await wikipediaWikitext(fetchImpl, directPage);
-  if (direct) {
-    const volume = volumeFromWikipediaWikitext(direct, title, chapterNumber);
-    if (volume) return volume;
+  for (const page of [directPage, englishSearchTitle(title)]) {
+    try {
+      const wikitext = await wikipediaWikitext(fetchImpl, page);
+      const volume = volumeFromWikipediaWikitext(wikitext, title, chapterNumber);
+      if (volume) return volume;
+    } catch {
+      // A missing chapter-list page should not hide the series page.
+    }
   }
 
   const api = new URL("https://en.wikipedia.org/w/api.php");

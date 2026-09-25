@@ -155,6 +155,33 @@ test("maps The Fable file-start chapters to their exact book volumes", () => {
   );
 });
 
+test("finds Nozoki Ana chapters in the series page when there is no separate chapter list", async () => {
+  const wikitext = `
+{{Graphic novel list
+|VolumeNumber = 4
+|ChapterList =
+*35. Terakado Makiko
+*36. Secret
+}}
+{{Graphic novel list
+|VolumeNumber = 5
+|ChapterList =
+*37. What's This
+}}`;
+  const fetchImpl = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "api.mangadex.org") return jsonResponse({ data: [] });
+    if (url.searchParams.get("action") === "parse") {
+      if (url.searchParams.get("page") === "Nozoki Ana") return jsonResponse({ parse: { wikitext } });
+      return new Response("", { status: 404 });
+    }
+    return jsonResponse({ query: { search: [] } });
+  };
+
+  assert.equal(await resolveMangaVolume({ fetchImpl, title: "Nozoki Ana", chapterNumber: "35" }), "4");
+  assert.equal(await resolveMangaVolume({ fetchImpl, title: "Nozoki Ana", chapterNumber: "37" }), "5");
+});
+
 test("uses the original Shogakukan volume cover when no English edition exists", async () => {
   const wikitext = `
 {{Graphic novel list
