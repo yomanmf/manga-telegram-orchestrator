@@ -380,10 +380,58 @@ function chapterNumberFromWikiLine(line) {
   return match ? numeric(match[1]) : null;
 }
 
+function volumeFromLocallyNumberedList(section, chapterNumber) {
+  const volumes = [];
+  let current = null;
+  let inChapterList = false;
+  let listDepth = 0;
+  for (const line of section.split(/\r?\n/)) {
+    const volumeMatch = line.match(/^\s*\|\s*VolumeNumber\s*=\s*[^\d\n]*(\d+(?:[.,]\d+)?)/i);
+    if (volumeMatch) {
+      current = { volume: volumeMatch[1].replace(",", "."), count: 0, first: null };
+      volumes.push(current);
+      inChapterList = false;
+      listDepth = 0;
+      continue;
+    }
+    if (!current) continue;
+    if (listDepth > 0) {
+      if (listDepth === 1 && /^\s*\|\s*\S/.test(line) && !/^\s*\|\s*\w+\s*=/.test(line)) {
+        current.count += 1;
+      }
+      listDepth += (line.match(/\{\{/g) || []).length - (line.match(/\}\}/g) || []).length;
+      continue;
+    }
+    if (/^\s*\|\s*\w+\s*=/.test(line)) {
+      inChapterList = /^\s*\|\s*ChapterList(?:Col\d+)?\s*=/i.test(line);
+    }
+    if (!inChapterList) continue;
+    const numberedList = line.match(/^\s*\{\{Numbered list(?:\s*\|\s*start\s*=\s*(\d+))?\s*$/i);
+    if (numberedList) {
+      current.first ??= Number(numberedList[1] || 1);
+      listDepth = 1;
+      continue;
+    }
+    if (/^\s*[*#]+\s*\S/.test(line)) {
+      current.first ??= chapterNumberFromWikiLine(line) ?? 1;
+      current.count += 1;
+    }
+  }
+  if (volumes.length < 2 || volumes[0].first !== 1 || volumes[1].first !== 1) return null;
+  let offset = 0;
+  for (const { volume, count } of volumes) {
+    offset += count;
+    if (chapterNumber <= offset) return volume;
+  }
+  return null;
+}
+
 export function volumeFromWikipediaWikitext(wikitext, title, chapterNumber) {
   const target = numeric(chapterNumber);
   if (target === null) return null;
   const section = wikipediaSeriesSection(wikitext, title);
+  const locallyNumbered = volumeFromLocallyNumberedList(section, target);
+  if (locallyNumbered) return locallyNumbered;
   let volume = null;
   let inChapterList = false;
   let numberedChapter = null;

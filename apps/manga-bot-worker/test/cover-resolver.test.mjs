@@ -155,6 +155,26 @@ test("maps The Fable file-start chapters to their exact book volumes", () => {
   );
 });
 
+test("maps globally numbered chapters when Wikipedia restarts numbering in each volume", () => {
+  const wikitext = `
+==20th Century Boys==
+${Array.from({ length: 10 }, (_, index) => `{{Graphic novel list
+|VolumeNumber = ${index + 1}
+|ChapterList =
+{{Numbered list
+${Array.from({ length: 5 }, () => "|{{nihongo|Chapter|章}}").join("\n")}
+}}
+|ChapterListCol2 =
+{{Numbered list|start=6
+${Array.from({ length: index === 0 ? 5 : 6 }, () => "|{{nihongo|Chapter|章}}").join("\n")}
+}}
+}}`).join("\n")}
+==21st Century Boys==`;
+  for (const [chapter, volume] of [[1, "1"], [10, "1"], [11, "2"], [21, "2"], [22, "3"], [98, "9"], [99, "10"], [100, "10"], [109, "10"], [110, null]]) {
+    assert.equal(volumeFromWikipediaWikitext(wikitext, "20th Century Boys", chapter), volume, `chapter ${chapter}`);
+  }
+});
+
 test("finds Nozoki Ana chapters in the series page when there is no separate chapter list", async () => {
   const wikitext = `
 {{Graphic novel list
