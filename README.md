@@ -186,8 +186,12 @@ lines to queue them for processing in that order.
 
 Available commands include `/status`, `/cancel`, `/retry`, `/kindle`,
 `/merge on`, and `/merge off`. `Merge vertical pages` is enabled by default and
-matches the web interface's PDF collector behavior, including right-to-left
-spreads and an empty left half for an unpaired vertical page.
+creates right-to-left spreads. Paired scans are scaled to the same height;
+unpaired pages have no artificial blank half. Kindle pages use a common 4:3
+Scribe canvas (portrait when all pages are portrait), fitting each page as large
+as possible without cropping or stretching. Unusually wide or tall source scans
+therefore cannot introduce extra margins on the rest of the book. Source artwork
+and margins already inside an image are preserved.
 
 The ReKindle browser uses the authenticated `/control/{action}` service-to-service
 route (`search`, `series`, `create`, `status`, `cancel`, `retry`, `torrents`,

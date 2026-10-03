@@ -123,25 +123,9 @@ async function preparePageImage(item, destinationDir, operationIndex, imageIndex
   };
 }
 
-async function prepareSingle(operation, mergeVerticalPages, destinationDir, operationIndex) {
+async function prepareSingle(operation, destinationDir, operationIndex) {
   const item = operation.item;
   const prepared = await preparePageImage(item, destinationDir, operationIndex, 0);
-  if (mergeVerticalPages && item.isVertical) {
-    return {
-      width: item.width * 2,
-      height: item.height,
-      size: prepared.size,
-      images: [{
-        filePath: prepared.filePath,
-        sourceFilePath: prepared.sourceFilePath,
-        x: item.width,
-        y: 0,
-        width: item.width,
-        height: item.height,
-        info: prepared.info
-      }]
-    };
-  }
   return {
     width: item.width,
     height: item.height,
@@ -160,20 +144,22 @@ async function prepareSingle(operation, mergeVerticalPages, destinationDir, oper
 
 async function preparePair(operation, destinationDir, operationIndex) {
   const { first, second } = operation;
-  const width = first.width + second.width;
   const height = Math.max(first.height, second.height);
+  const firstWidth = Math.round(first.width * height / first.height);
+  const secondWidth = Math.round(second.width * height / second.height);
+  const width = firstWidth + secondWidth;
   const [preparedFirst, preparedSecond] = await Promise.all([
     preparePageImage(first, destinationDir, operationIndex, 0),
     preparePageImage(second, destinationDir, operationIndex, 1)
   ]);
-  function pageImage(item, prepared, x, y) {
+  function pageImage(prepared, x, imageWidth) {
     return {
       filePath: prepared.filePath,
       sourceFilePath: prepared.sourceFilePath,
       x,
-      y,
-      width: item.width,
-      height: item.height,
+      y: 0,
+      width: imageWidth,
+      height,
       info: prepared.info
     };
   }
@@ -182,18 +168,8 @@ async function preparePair(operation, destinationDir, operationIndex) {
     height,
     size: preparedFirst.size + preparedSecond.size,
     images: [
-      pageImage(
-        second,
-        preparedSecond,
-        0,
-        Math.floor((height - second.height) / 2)
-      ),
-      pageImage(
-        first,
-        preparedFirst,
-        second.width,
-        Math.floor((height - first.height) / 2)
-      )
+      pageImage(preparedSecond, 0, secondWidth),
+      pageImage(preparedFirst, secondWidth, firstWidth)
     ]
   };
 }
@@ -201,14 +177,13 @@ async function preparePair(operation, destinationDir, operationIndex) {
 async function prepareOperations({
   operations,
   destinationDir,
-  mergeVerticalPages,
   concurrency
 }) {
   await fs.mkdir(destinationDir, { recursive: true });
   return mapWithConcurrency(operations, concurrency, async (operation, index) => {
     const layout = operation.type === "pair"
       ? await preparePair(operation, destinationDir, index)
-      : await prepareSingle(operation, mergeVerticalPages, destinationDir, index);
+      : await prepareSingle(operation, destinationDir, index);
     return {
       ...layout,
       sources: operationSources(operation)
@@ -296,7 +271,6 @@ export async function buildKindleImageVolumes({
   const prepared = await prepareOperations({
     operations,
     destinationDir: preparedImageDir,
-    mergeVerticalPages,
     concurrency: boundedInteger(imageRenderConcurrency, 2, { min: 1, max: 4 })
   });
   const groups = splitPreparedPages(prepared, maxBytes);

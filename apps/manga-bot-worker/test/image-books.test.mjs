@@ -114,11 +114,11 @@ test("builds a compact Kindle-compatible EPUB without recompressing JPEG inputs"
   const firstPage = await archive.file(pageDocuments[0]).async("string");
   const pairedPage = await archive.file(pageDocuments[1]).async("string");
   assert.doesNotMatch(firstPage, /<svg|<image|<rect/);
-  assert.match(firstPage, /<img [^>]*style="left:10px;top:0px;width:10px;height:20px"/);
+  assert.match(firstPage, /<img [^>]*style="left:320px;top:0px;width:1280px;height:2560px"/);
   assert.doesNotMatch(pairedPage, /<svg|<image|<rect/);
   assert.equal((pairedPage.match(/<img /g) || []).length, 2);
-  assert.match(pairedPage, /style="left:0px;top:0px;width:10px;height:20px"/);
-  assert.match(pairedPage, /style="left:10px;top:0px;width:10px;height:20px"/);
+  assert.match(pairedPage, /style="left:0px;top:320px;width:960px;height:1920px"/);
+  assert.match(pairedPage, /style="left:960px;top:320px;width:960px;height:1920px"/);
   const opf = await archive.file("OEBPS/content.opf").async("string");
   assert.doesNotMatch(opf, /properties="svg"|media-type="image\/png"[^>]*page-image/);
   await assert.rejects(
@@ -170,4 +170,53 @@ test("fills non-final EPUBs by splitting chapters", async () => {
     ["chapter-one", "chapter-two"],
     ["chapter-two"]
   ]);
+});
+
+test("Scribe pages fit the screen despite 20th Century Boys and I am a Hero scan outliers", async () => {
+  const directory = await fs.mkdtemp('/tmp/manga-scribe-');
+  try {
+    const imagePath = path.join(directory, 'page.jpg');
+    await sharp({ create: { width: 10, height: 20, channels: 3, background: '#123456' } }).jpeg().toFile(imagePath);
+    // Actual first-page dimensions from the source; pixel resolution must not
+    // dictate the physical size of neighbouring pages or the book's canvas.
+    const cases = [
+      [[1200, 1558], [1200, 2523], [1200, 1736], [1200, 1736], [1200, 1736]],
+      [[3887, 1600], [1103, 1600], [1120, 1600], [1113, 1600], [2284, 1600]],
+      [[1200, 1736], [600, 868], [1200, 1736]]
+    ];
+    for (const [index, sizes] of cases.entries()) {
+      const [volume] = await buildKindleImageVolumes({
+        sources: [{ name: 'chapter', pages: sizes.map(([width, height]) => ({
+          filePath: imagePath, width, height, format: 'jpg'
+        })) }],
+        destinationDir: path.join(directory, String(index)),
+        baseName: 'Regression', maxBytes: 10_000_000,
+        coverPath: imagePath, coverLookup: false
+      });
+      const zip = await JSZip.loadAsync(await fs.readFile(volume.filePath));
+      const opf = await zip.file('OEBPS/content.opf').async('string');
+      assert.match(opf, /original-resolution" content="2560x1920"/);
+      for (const name of Object.keys(zip.files).filter((name) => /page-\d+[.]xhtml$/.test(name))) {
+        const html = await zip.file(name).async('string');
+        assert.match(html, /width=2560,height=1920/);
+        const images = [...html.matchAll(/left:([\d.]+)px;top:([\d.]+)px;width:([\d.]+)px;height:([\d.]+)px/g)]
+          .map((match) => match.slice(1).map(Number));
+        assert.ok(images.length);
+        const left = Math.min(...images.map(([x]) => x));
+        const top = Math.min(...images.map(([, y]) => y));
+        const right = Math.max(...images.map(([x, , w]) => x + w));
+        const bottom = Math.max(...images.map(([, y, , h]) => y + h));
+        const near = (a, b) => Math.abs(a - b) < 0.001;
+        assert.ok(near(left, 2560 - right) && near(top, 1920 - bottom), 'content is centred');
+        assert.ok(near(right - left, 2560) || near(bottom - top, 1920), 'content fills at least one screen dimension');
+        assert.ok(left >= -0.001 && top >= -0.001 && right <= 2560.001 && bottom <= 1920.001, 'no cropping');
+        if (images.length === 2) {
+          assert.ok(near(images[0][1], images[1][1]) && near(images[0][3], images[1][3]), 'paired scans have equal physical height');
+          assert.ok(near(images[0][0] + images[0][2], images[1][0]), 'RTL pages meet without a gap');
+        }
+      }
+    }
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });

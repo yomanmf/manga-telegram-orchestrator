@@ -195,7 +195,11 @@ function imagePageDocument(title, page, pageIndex, type, canvas) {
   const offsetY = (canvas.height - page.height * scale) / 2;
   const images = page.images.map((image, imageIndex) => {
     const href = `images/${pageImageFileName(page, pageIndex, imageIndex)}`;
-    return `<img src="${escapeXml(href)}" alt="${escapeXml(`${title} - image ${imageIndex + 1}`)}" style="left:${offsetX + image.x * scale}px;top:${offsetY + image.y * scale}px;width:${image.width * scale}px;height:${image.height * scale}px"/>`;
+    const [left, top, width, height] = [
+      offsetX + image.x * scale, offsetY + image.y * scale,
+      image.width * scale, image.height * scale
+    ].map((value) => Number(value.toFixed(4)));
+    return `<img src="${escapeXml(href)}" alt="${escapeXml(`${title} - image ${imageIndex + 1}`)}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px"/>`;
   }).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html><html xmlns="${XHTML_NAMESPACE}" xmlns:epub="${EPUB_NAMESPACE}" lang="en"><head><title>${escapeXml(title)}</title>
@@ -349,10 +353,13 @@ export async function buildFixedLayoutMangaEpub({
       });
     }
   }
-  const canvas = {
-    width: Math.max(...pages.map((page) => page.width)),
-    height: Math.max(...pages.map((page) => page.height))
-  };
+  // Scribe has a 4:3 display. A source-sized canvas adds a second layer of
+  // letterboxing on the device; one unusually wide/tall scan shrinks the book.
+  // Keep one Kindle coordinate system and fit every page directly to the screen.
+  const landscape = pages.some((page) => page.width > page.height);
+  const canvas = landscape
+    ? { width: 2560, height: 1920 }
+    : { width: 1920, height: 2560 };
   const identifier = `urn:uuid:${crypto.randomUUID()}`;
   const entries = [
     { name: "mimetype", data: Buffer.from(EPUB_MIMETYPE), compress: false },
