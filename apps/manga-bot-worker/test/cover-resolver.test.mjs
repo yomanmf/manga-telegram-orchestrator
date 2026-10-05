@@ -232,6 +232,39 @@ test("uses the original Shogakukan volume cover when no English edition exists",
   assert.deepEqual(cover.bytes, coverBytes);
 });
 
+test("finds distinct I am a Hero covers when Wikipedia capitalizes the title differently", async () => {
+  const wikitext = `
+| ja_kanji = アイアムアヒーロー
+|VolumeNumber = 01
+|OriginalISBN = 978-4-09-182580-3
+|VolumeNumber = 02
+|OriginalISBN = 978-4-09-182779-1`;
+  const fetchImpl = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "itunes.apple.com") return jsonResponse({ results: [] });
+    if (url.hostname === "kodansha.us") return new Response("", { status: 404 });
+    if (url.hostname === "openlibrary.org") return jsonResponse({ docs: [] });
+    if (url.hostname === "en.wikipedia.org") {
+      if (url.searchParams.get("action") === "query") {
+        return jsonResponse({ query: { search: [{ title: "I Am a Hero" }] } });
+      }
+      return url.searchParams.get("page") === "I Am a Hero"
+        ? jsonResponse({ parse: { wikitext } })
+        : jsonResponse({ error: { code: "missingtitle" } });
+    }
+    if (url.hostname === "shogakukan-comic.jp") {
+      return new Response(pngWithDimensions(400, 567, url.pathname), { status: 200 });
+    }
+    return new Response("", { status: 404 });
+  };
+  const covers = await Promise.all(["1", "2"].map((volume) =>
+    resolveEnglishVolumeCover({ fetchImpl, title: "I am a Hero", volume })));
+  assert.deepEqual(covers.map((cover) => cover.source), [
+    "Shogakukan (original edition)", "Shogakukan (original edition)"
+  ]);
+  assert.notDeepEqual(covers[0].bytes, covers[1].bytes);
+});
+
 test("uses a Japanese Apple Books cover when an old Shogakukan image is unavailable", async () => {
   const wikitext = `
 | ja_kanji = ホムンクルス

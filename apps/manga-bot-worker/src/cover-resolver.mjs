@@ -492,7 +492,25 @@ async function wikipediaWikitext(fetchImpl, page) {
   api.searchParams.set("prop", "wikitext");
   api.searchParams.set("format", "json");
   api.searchParams.set("formatversion", "2");
-  const result = await json(fetchImpl, api);
+  let result = await json(fetchImpl, api);
+  if (result?.error?.code === "missingtitle") {
+    const search = new URL("https://en.wikipedia.org/w/api.php");
+    search.searchParams.set("action", "query");
+    search.searchParams.set("list", "search");
+    search.searchParams.set("srsearch", `"${page}"`);
+    search.searchParams.set("srnamespace", "0");
+    search.searchParams.set("srlimit", "10");
+    search.searchParams.set("srprop", "");
+    search.searchParams.set("format", "json");
+    search.searchParams.set("formatversion", "2");
+    const matches = await json(fetchImpl, search);
+    const canonical = matches?.query?.search?.find((entry) =>
+      String(entry.title).toLocaleLowerCase("en-US") === page.toLocaleLowerCase("en-US"));
+    if (canonical) {
+      api.searchParams.set("page", canonical.title);
+      result = await json(fetchImpl, api);
+    }
+  }
   return typeof result?.parse?.wikitext === "string" ? result.parse.wikitext : null;
 }
 
